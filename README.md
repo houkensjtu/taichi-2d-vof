@@ -1,6 +1,7 @@
 # taichi-2d-vof
 A single file VOF fluid solver implementation in Taichi.
 
+![VOF blog](https://user-images.githubusercontent.com/2747993/225257322-8b55cf4e-16fa-4801-912d-8f1eb89a93c5.gif)
 
 ## Usage
 You can execute the script with the following arguments to control its behavior:
