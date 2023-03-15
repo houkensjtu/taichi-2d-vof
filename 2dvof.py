@@ -7,26 +7,27 @@ import os
 
 ti.init(arch=ti.gpu, default_fp=ti.f32)  # Set default fp so that float=ti.f32
 
-SAVE_FIG = False
-
 parser = argparse.ArgumentParser()  # Get the initial condition
-parser.add_argument('-ic', type=int, choices=[1, 2, 3], default=1,)
+# 1 - Dam Break; 2 - Rising Bubble; 3 - Droping liquid
+parser.add_argument('-ic', type=int, choices=[1, 2, 3], default=1)
+parser.add_argument('-s', action='store_true')
 args = parser.parse_args()
 initial_condition = args.ic
+SAVE_FIG = args.s
 
 nx = 200  # Number of grid points in the x direction
 ny = 200  # Number of grid points in the y direction
 
 Lx = 0.1  # The length of the domain
 Ly = 0.1 # The width of the domain
-rho_water = 1000.0
-rho_air = 10.0
-nu_water = 1.0e-6  # kinematic viscosity, nu = mu / rho
-nu_air = 1.5e-5
+rho_l = 1000.0
+rho_g = 50.0
+nu_l = 1.0e-6  # kinematic viscosity, nu = mu / rho
+nu_g = 1.5e-5
 sigma = ti.field(dtype=float, shape=())
-sigma[None] = 0.07
-gx = 0 # Gravity
-gy = -9.8
+sigma[None] = 0.007
+gx = 0
+gy = -5
 
 dt = 4e-6  # Use smaller dt for higher density ratio
 eps = 1e-6  # Threshold used in vfconv and f post processings
@@ -92,10 +93,10 @@ magnitude = ti.field(float, shape=(imax+2, jmax+2))
 resolution = (nx * 2, ny * 2)
 rgb_buf = ti.field(dtype=float, shape=resolution)
 
-print(f'>>> A VOF solver written in Taichi')
+print(f'>>> A VOF solver written in Taichi; Press q to exit.')
 print(f'>>> Grid resolution: {nx} x {ny}, dt = {dt:4.2e}')
-print(f'>>> Density ratio: {rho_water / rho_air : 4.2f}, gravity : {gy : 4.2f}, sigma : {sigma[None] : 4.2f}')
-print(f'>>> Viscosity ratio: {nu_water / nu_air : 4.2f}')
+print(f'>>> Density ratio: {rho_l / rho_g : 4.2f}, gravity : {gy : 4.2f}, sigma : {sigma[None] : 4.2f}')
+print(f'>>> Viscosity ratio: {nu_l / nu_g : 4.2f}')
 print(f'>>> Please wait a few seconds to let the kernels compile...')
 
 
@@ -158,7 +159,7 @@ def set_init_F(ic:ti.i32):
         for i, j in ti.ndrange(imax + 2, jmax + 2):
             x = xm[i]
             y = ym[j]
-            r = Lx / 16
+            r = Lx / 12
             cx, cy = Lx / 2, 2 * r
             F[i, j] = find_area(i, j, cx, cy, r)
             Fn[i, j] = F[i, j]
@@ -166,11 +167,11 @@ def set_init_F(ic:ti.i32):
         for i, j in ti.ndrange(imax + 2, jmax + 2):
             x = xm[i]
             y = ym[j]
-            r = Lx / 16
-            cx, cy = Lx / 2, Ly - 2 * r
+            r = Lx / 12
+            cx, cy = Lx / 2, Ly - 3 * r
             F[i, j] = 1.0 - find_area(i, j, cx, cy, r)
             Fn[i, j] = F[i, j]
-            if y < Ly * 0.3:
+            if y < Ly * 0.37:
                 F[i, j] = 1.0
                 Fn[i, j] = 1.0
 
@@ -215,8 +216,8 @@ def var(a, b, c):    # Find the median of a,b, and c
 def cal_nu_rho():
     for I in ti.grouped(rho):
         F = var(0.0, 1.0, F[I])
-        rho[I] = rho_air * (1 - F) + rho_water * F
-        nu[I] = nu_water * F + nu_air * (1.0 - F) 
+        rho[I] = rho_g * (1 - F) + rho_l * F
+        nu[I] = nu_l * F + nu_g * (1.0 - F) 
 
 
 @ti.kernel
@@ -514,7 +515,7 @@ def get_vnorm_field():
         
 # Start main script
 istep = 0
-nstep = 50  # Interval to update GUI
+nstep = 100  # Interval to update GUI
 grid_staggered()
 set_init_F(initial_condition)
 
@@ -525,8 +526,11 @@ vis_option = 0  # Tag for display
 
 while gui.running:
     istep += 1
-    if gui.get_event((ti.GUI.RELEASE, ti.GUI.SPACE)):
-        vis_option += 1
+    for e in gui.get_events(gui.RELEASE):
+        if e.key == gui.SPACE:
+            vis_option += 1
+        elif e.key == 'q':
+            gui.running = False
     cal_nu_rho()
 
     cal_kappa()
@@ -579,6 +583,7 @@ while gui.running:
             ym1 = ym.to_numpy()
             fx, fy = 5, Ly / Lx * 5
             plt.figure(figsize=(fx, fy))
-            plt.contourf(Fnp.T, cmap=plt.cm.jet)
+            plt.axis('off')
+            plt.contourf(Fnp.T, cmap=plt.cm.Blues)
             plt.savefig(f'output/{count:06d}-f.png')
             plt.close()
