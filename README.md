@@ -3,6 +3,12 @@ A single file VOF fluid solver implementation in Taichi.
 
 ![VOF blog](https://user-images.githubusercontent.com/2747993/225257322-8b55cf4e-16fa-4801-912d-8f1eb89a93c5.gif)
 
+Simply install Taichi and run!
+```bash
+$ python3 -m pip install taichi
+$ python3 2dvof.py
+```
+
 ## Usage
 You can execute the script with the following arguments to control its behavior:
 ```bash
@@ -25,6 +31,9 @@ the script can display
 3. V velocity
 4. Velocity norm
 
+![display](https://user-images.githubusercontent.com/2747993/225259961-4702b9aa-7926-46d4-b058-7d49dbd491ca.png)
+
+
 You can follow the steps below if you wish to output a video file:
 ```bash
 $ python3 2dvof.py -ic 1 -s  # Add -s argument to enable saving
@@ -37,4 +46,8 @@ $ ti gif -i video.mp4  # Use Taichi's gif utility to generate a gif file
 WIP.
 
 ## References
-WIP.
+1. Volume of Fluid (VOF) Method for the Dynamics of Free Boundaries, C. W. Hirt and B. D. Nichols
+2. Direct Numerical Simulations of Gas–Liquid Multiphase Flows, Grétar Tryggvason, Ruben Scardovelli,  Stéphane Zaleski
+3. Fully Multidimensional Flux-Corrected Transport Algorithms for Fluids, Steven T. Zalesak
+4. Volume-Tracking Methods For Interfacial Flow Calculations, Murray Rudman
+5. A Continuum Method for Modeling Surface Tension, J.U. Brackbill, D.B. Kothe, C. Zemach
