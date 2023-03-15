@@ -51,3 +51,8 @@ WIP.
 3. Fully Multidimensional Flux-Corrected Transport Algorithms for Fluids, Steven T. Zalesak
 4. Volume-Tracking Methods For Interfacial Flow Calculations, Murray Rudman
 5. A Continuum Method for Modeling Surface Tension, J.U. Brackbill, D.B. Kothe, C. Zemach
+
+
+## Acknowledgement
+The code in this repository is jointly developed by @houkensjtu and @zju-zhoucl. The original early version can be found
+in @zju-zhoucl's repo [here](https://github.com/zju-zhoucl/taichi_VOF).
