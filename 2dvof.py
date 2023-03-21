@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 import argparse
 import os
+import flow_visualization as fv
 
 ti.init(arch=ti.gpu, default_fp=ti.f32)  # Set default fp so that float=ti.f32
 
@@ -72,6 +73,7 @@ Ap = ti.field(float, shape=(imax + 2, jmax + 2))
 rhs = ti.field(float, shape=(imax + 2, jmax + 2))
 rho = ti.field(float, shape=(imax + 2, jmax + 2))
 nu = ti.field(float, shape=(imax + 2, jmax + 2))
+V = ti.Vector.field(2, dtype=float, shape=(imax + 2, jmax + 2))
 
 # Variables for interface reconstruction
 mx1 = ti.field(float, shape=(imax + 2, jmax + 2))
@@ -512,6 +514,13 @@ def get_vnorm_field():
     max = Ly / 0.2
     for I in ti.grouped(rgb_buf):
         rgb_buf[I] = ti.sqrt(u[I // r] ** 2 + v[I // r] ** 2) / max
+
+
+@ti.kernel
+def interp_velocity():
+    for i, j in ti.ndrange((1, imax + 2), (1, jmax + 1)):
+        V[i, j] = ti.Vector([(u[i, j] + u[i + 1, j])/2, (v[i, j] + v[i, j + 1])/2])
+        
         
 # Start main script
 istep = 0
@@ -521,7 +530,7 @@ set_init_F(initial_condition)
 
 os.makedirs('output', exist_ok=True)  # Make dir for output
 os.makedirs('data', exist_ok=True)  # Make dir for data save; only used for debugging
-gui = ti.GUI('VOF Solver', resolution)
+gui = ti.GUI('VOF Solver', resolution, background_color=0xFFFFFF)
 vis_option = 0  # Tag for display 
 
 while gui.running:
@@ -548,31 +557,37 @@ while gui.running:
     solve_VOF_rudman()        
     post_process_f()
     set_BC()
-        
+
+    num_options = 5
     if (istep % nstep) == 0:  # Output data every <nstep> steps
-        if vis_option % 4 == 0: # Display VOF distribution
+        if vis_option % num_options == 0: # Display VOF distribution
             print(f'>>> Number of steps:{istep:<5d}, Time:{istep*dt:5.2e} sec. Displaying VOF field.')            
             get_vof_field()
             rgbnp = rgb_buf.to_numpy()
             gui.set_image(cm.Blues(rgbnp))
 
-        if vis_option % 4 == 1:  # Display the u field
+        if vis_option % num_options == 1:  # Display the u field
             print(f'>>> Number of steps:{istep:<5d}, Time:{istep*dt:5.2e} sec. Displaying u velocity.')
             get_u_field()
             rgbnp = rgb_buf.to_numpy()
             gui.set_image(cm.coolwarm(rgbnp))
 
-        if vis_option % 4 == 2:  # Display the v field
+        if vis_option % num_options == 2:  # Display the v field
             print(f'>>> Number of steps:{istep:<5d}, Time:{istep*dt:5.2e} sec. Displaying v velocity.')
             get_v_field()
             rgbnp = rgb_buf.to_numpy()
             gui.set_image(cm.coolwarm(rgbnp))
 
-        if vis_option % 4 == 3:  # Display velocity norm
+        if vis_option % num_options == 3:  # Display velocity norm
             print(f'>>> Number of steps:{istep:<5d}, Time:{istep*dt:5.2e} sec. Displaying velocity norm.')            
             get_vnorm_field()
             rgbnp = rgb_buf.to_numpy()
             gui.set_image(cm.plasma(rgbnp))
+
+        if vis_option % num_options == 4:  # Display velocity vectors
+            print(f'>>> Number of steps:{istep:<5d}, Time:{istep*dt:5.2e} sec. Displaying velocity vectors.')
+            interp_velocity()
+            fv.plot_vector_field(vector_field=V, arrow_spacing=4, gui=gui)
             
         gui.show()
         
