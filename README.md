@@ -9,6 +9,8 @@ $ python3 -m pip install taichi
 $ python3 2dvof.py
 ```
 
+In the GUI window, you can press **SPACE** to switch between visualization methods, or press **q** on your keyboard to terminate the simulation.
+
 ## Usage
 You can execute the script with the following arguments to control its behavior:
 ```bash
@@ -24,15 +26,15 @@ You can also tweak the `set_init_F()` kernel to implement your own. Be aware
 that the solver might become unstable under various settings. The material
 properties are carefully chosed to produce best results.
 
-During the operation, press SPACE to switch visualization method. Currently,
+During the operation, press **SPACE** to switch visualization method. Currently,
 the script can display
 1. VOF field
 2. U velocity
 3. V velocity
 4. Velocity norm
+5. Velocity vectors (Implemented in `flow_visualization.py` module)
 
-![display](https://user-images.githubusercontent.com/2747993/225259961-4702b9aa-7926-46d4-b058-7d49dbd491ca.png)
-
+![display](https://user-images.githubusercontent.com/2747993/226554195-cd767de2-f386-46aa-8be7-00f1ed0c7f7a.png)
 
 You can follow the steps below if you wish to output a video file:
 ```bash
