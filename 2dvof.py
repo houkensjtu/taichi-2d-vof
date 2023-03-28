@@ -20,7 +20,7 @@ nx = 200  # Number of grid points in the x direction
 ny = 200  # Number of grid points in the y direction
 
 Lx = 0.1  # The length of the domain
-Ly = 0.1 # The width of the domain
+Ly = 0.1  # The width of the domain
 rho_l = 1000.0
 rho_g = 50.0
 nu_l = 1.0e-6  # kinematic viscosity, nu = mu / rho
@@ -587,7 +587,7 @@ while gui.running:
         if vis_option % num_options == 4:  # Display velocity vectors
             print(f'>>> Number of steps:{istep:<5d}, Time:{istep*dt:5.2e} sec. Displaying velocity vectors.')
             interp_velocity()
-            fv.plot_vector_field(vector_field=V, arrow_spacing=4, gui=gui)
+            fv.plot_arrow_field(vector_field=V, arrow_spacing=4, gui=gui)
             
         gui.show()
         

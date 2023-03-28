@@ -2,6 +2,12 @@ import numpy as np
 import taichi as ti
 
 def plot_vector_field(vector_field, arrow_spacing, gui):
+    '''
+    Plot the velocity vector field using gui.lines
+    and gui.triangles.
+    Might slow down the gui refresh rate because of the
+    overhead of the nested for-loop.
+    '''
     V_np = vector_field.to_numpy()
     V_norm = np.linalg.norm(V_np, axis=-1)
     nx, ny = V_np.shape[0], V_np.shape[1]
@@ -24,4 +30,26 @@ def plot_vector_field(vector_field, arrow_spacing, gui):
             arrowhead_a = end - arrowhead_size * arrow_dir + 0.5 * arrowhead_size * arrow_normal
             arrowhead_b = end - arrowhead_size * arrow_dir - 0.5 * arrowhead_size * arrow_normal
             gui.triangles(a=end, b=arrowhead_a, c=arrowhead_b, color=0x000000)
-            gui.lines(begin=begin, end=end, radius=1, color=0x000000)                
+            gui.lines(begin=begin, end=end, radius=1, color=0x000000)
+
+def plot_arrow_field(vector_field, arrow_spacing, gui):
+    '''
+    Plot the velocity vector field using the built-in
+    gui.arrows.
+    '''
+    V_np = vector_field.to_numpy()
+    V_norm = np.linalg.norm(V_np, axis=-1)
+    nx, ny, ndim = V_np.shape
+    
+    max_magnitude = np.max(V_norm)
+    scale_factor = min(nx, ny) * 0.1 / (max_magnitude + 1e-16)
+
+    x = np.arange(0, 1, arrow_spacing / nx)
+    y = np.arange(0, 1, arrow_spacing / ny)
+
+    X, Y = np.meshgrid(x, y)
+    begin = np.dstack((X, Y)).reshape(-1, 2, order='F')
+    incre = (V_np[::arrow_spacing,::arrow_spacing] \
+             * np.array([scale_factor / nx, scale_factor / ny])) \
+            .reshape(-1, 2, order='C')
+    gui.arrows(orig=begin, direction=incre, radius=1, color=0x000000)
