@@ -53,7 +53,6 @@ dyi = 1 / dy
 
 # Variables for VOF function
 F = ti.field(float, shape=(imax + 2, jmax + 2))
-Fn = ti.field(float, shape=(imax + 2, jmax + 2))
 Ftd = ti.field(float, shape=(imax + 2, jmax + 2))
 ax = ti.field(float, shape=(imax + 2, jmax + 2))
 ay = ti.field(float, shape=(imax + 2, jmax + 2))
@@ -156,7 +155,6 @@ def set_init_F(ic:ti.i32):
         for i, j in ti.ndrange(imax + 2, jmax + 2):
             if (xm[i] >= x1) and (xm[i] <= x2) and (ym[j] >= y1) and (ym[j] <= y2):
                 F[i, j] = 1.0
-                Fn[i, j] = F[i, j]
     elif ic == 2:  # Rising bubble
         for i, j in ti.ndrange(imax + 2, jmax + 2):
             x = xm[i]
@@ -164,7 +162,6 @@ def set_init_F(ic:ti.i32):
             r = Lx / 12
             cx, cy = Lx / 2, 2 * r
             F[i, j] = find_area(i, j, cx, cy, r)
-            Fn[i, j] = F[i, j]
     elif ic == 3:  # Liquid drop
         for i, j in ti.ndrange(imax + 2, jmax + 2):
             x = xm[i]
@@ -172,10 +169,8 @@ def set_init_F(ic:ti.i32):
             r = Lx / 12
             cx, cy = Lx / 2, Ly - 3 * r
             F[i, j] = 1.0 - find_area(i, j, cx, cy, r)
-            Fn[i, j] = F[i, j]
             if y < Ly * 0.37:
                 F[i, j] = 1.0
-                Fn[i, j] = 1.0
 
             
 @ti.kernel
@@ -343,16 +338,13 @@ def solve_VOF_rudman():
 
 @ti.kernel
 def fct_x_sweep():
-    for I in ti.grouped(Fn):
-        Fn[I] = F[I]
-        
     for i, j in ti.ndrange((imin, imax + 1), (jmin, jmax + 1)):
         dv = dx * dy - dt * dy * (u[i + 1, j] - u[i, j])
-        fl_L = u[i, j] * dt * Fn[i - 1, j] if u[i, j] >= 0 else u[i, j] * dt * Fn[i, j]
-        fr_L = u[i + 1, j] * dt * Fn[i, j] if u[i + 1, j] >= 0 else u[i + 1, j] * dt * Fn[i + 1, j]
+        fl_L = u[i, j] * dt * F[i - 1, j] if u[i, j] >= 0 else u[i, j] * dt * F[i, j]
+        fr_L = u[i + 1, j] * dt * F[i, j] if u[i + 1, j] >= 0 else u[i + 1, j] * dt * F[i + 1, j]
         ft_L = 0
         fb_L = 0
-        Ftd[i, j] = (Fn[i, j] + (fl_L - fr_L + fb_L - ft_L) * dy / (dx * dy)) * dx * dy / dv
+        Ftd[i, j] = (F[i, j] + (fl_L - fr_L + fb_L - ft_L) * dy / (dx * dy)) * dx * dy / dv
         if Ftd[i, j] > 1. or Ftd[i, j] < 0:
             Ftd[i, j] = var(0, 1, Ftd[i, j])
         
@@ -360,13 +352,13 @@ def fct_x_sweep():
         fmax = ti.max(Ftd[i, j], Ftd[i - 1, j], Ftd[i + 1, j])
         fmin = ti.min(Ftd[i, j], Ftd[i - 1, j], Ftd[i + 1, j])
         
-        fl_L = u[i, j] * dt * Fn[i - 1, j] if u[i, j] >= 0 else u[i, j] * dt * Fn[i, j]
-        fr_L = u[i + 1, j] * dt * Fn[i, j] if u[i + 1, j] >= 0 else u[i + 1, j] * dt * Fn[i + 1, j]
+        fl_L = u[i, j] * dt * F[i - 1, j] if u[i, j] >= 0 else u[i, j] * dt * F[i, j]
+        fr_L = u[i + 1, j] * dt * F[i, j] if u[i + 1, j] >= 0 else u[i + 1, j] * dt * F[i + 1, j]
         ft_L = 0
         fb_L = 0
         
-        fl_H = u[i, j] * dt * Fn[i - 1, j] if u[i, j] <= 0 else u[i, j] * dt * Fn[i, j]
-        fr_H = u[i + 1, j] * dt * Fn[i, j] if u[i + 1, j] <= 0 else u[i + 1, j] * dt * Fn[i + 1, j]
+        fl_H = u[i, j] * dt * F[i - 1, j] if u[i, j] <= 0 else u[i, j] * dt * F[i, j]
+        fr_H = u[i + 1, j] * dt * F[i, j] if u[i + 1, j] <= 0 else u[i + 1, j] * dt * F[i + 1, j]
         ft_H = 0
         fb_H = 0
 
@@ -410,17 +402,13 @@ def fct_x_sweep():
 
 @ti.kernel
 def fct_y_sweep():
-
-    for I in ti.grouped(Fn):
-        Fn[I] = F[I]
-
     for i, j in ti.ndrange((imin, imax + 1), (jmin, jmax + 1)):
         dv = dx * dy - dt * dx * (v[i, j + 1] - v[i, j])
         fl_L = 0
         fr_L = 0
-        ft_L = v[i, j + 1] * dt * Fn[i, j] if v[i, j + 1] >= 0 else v[i, j + 1] * dt * Fn[i, j + 1]
-        fb_L = v[i, j] * dt * Fn[i, j - 1] if v[i, j] >= 0 else v[i, j] * dt * Fn[i, j]
-        Ftd[i, j] = (Fn[i, j] + (fl_L - fr_L + fb_L - ft_L) * dy / (dx * dy)) * dx * dy / dv
+        ft_L = v[i, j + 1] * dt * F[i, j] if v[i, j + 1] >= 0 else v[i, j + 1] * dt * F[i, j + 1]
+        fb_L = v[i, j] * dt * F[i, j - 1] if v[i, j] >= 0 else v[i, j] * dt * F[i, j]
+        Ftd[i, j] = (F[i, j] + (fl_L - fr_L + fb_L - ft_L) * dy / (dx * dy)) * dx * dy / dv
         if Ftd[i, j] > 1. or Ftd[i, j] < 0:
             Ftd[i, j] = var(0, 1, Ftd[i, j])
 
@@ -430,13 +418,13 @@ def fct_y_sweep():
         
         fl_L = 0
         fr_L = 0
-        ft_L = v[i, j + 1] * dt * Fn[i, j] if v[i, j + 1] >= 0 else v[i, j + 1] * dt * Fn[i, j + 1]
-        fb_L = v[i, j] * dt * Fn[i, j - 1] if v[i, j] >= 0 else v[i, j] * dt * Fn[i, j]
+        ft_L = v[i, j + 1] * dt * F[i, j] if v[i, j + 1] >= 0 else v[i, j + 1] * dt * F[i, j + 1]
+        fb_L = v[i, j] * dt * F[i, j - 1] if v[i, j] >= 0 else v[i, j] * dt * F[i, j]
         
         fl_H = 0
         fr_H = 0
-        ft_H = v[i, j + 1] * dt * Fn[i, j] if v[i, j + 1] <= 0 else v[i, j + 1] * dt * Fn[i, j + 1]
-        fb_H = v[i, j] * dt * Fn[i, j - 1] if v[i, j] <= 0 else v[i, j] * dt * Fn[i, j]
+        ft_H = v[i, j + 1] * dt * F[i, j] if v[i, j + 1] <= 0 else v[i, j + 1] * dt * F[i, j + 1]
+        fb_H = v[i, j] * dt * F[i, j - 1] if v[i, j] <= 0 else v[i, j] * dt * F[i, j]
 
         ax[i + 1, j] = 0
         ax[i, j] = 0
@@ -540,10 +528,11 @@ while gui.running:
             vis_option += 1
         elif e.key == 'q':
             gui.running = False
+            
     cal_nu_rho()
-
+    get_normal_young()
     cal_kappa()
-    get_normal_young()        
+    
     # Advection
     advect_upwind()
     set_BC()
