@@ -44,8 +44,6 @@ xnp = np.hstack((0.0, np.linspace(0, Lx, nx + 1), Lx)).astype(np.float32)  # [0,
 x.from_numpy(xnp)
 ynp = np.hstack((0.0, np.linspace(0, Ly, ny + 1), Ly)).astype(np.float32)  # [0, 0, ... 1, 1]
 y.from_numpy(ynp)
-xm = ti.field(float, shape=imax + 2)
-ym = ti.field(float, shape=jmax + 2)
 dx = x[imin + 2] - x[imin + 1]
 dy = y[jmin + 2] - y[jmin + 1]
 dxi = 1 / dx
@@ -101,14 +99,6 @@ print(f'>>> Viscosity ratio: {nu_l / nu_g : 4.2f}')
 print(f'>>> Please wait a few seconds to let the kernels compile...')
 
 
-@ti.kernel
-def grid_staggered():
-    for i in xm:
-        xm[i] = 0.5 * (x[i] + x[i + 1])
-    for j in ym:
-        ym[j] = 0.5 * (y[j] + y[j + 1])
-
-
 @ti.func
 def find_area(i, j, cx, cy, r):
     a = 0.0
@@ -153,23 +143,19 @@ def set_init_F(ic:ti.i32):
         y1 = 0.0
         y2 = Ly / 2
         for i, j in ti.ndrange(imax + 2, jmax + 2):
-            if (xm[i] >= x1) and (xm[i] <= x2) and (ym[j] >= y1) and (ym[j] <= y2):
+            if (x[i] >= x1) and (x[i] <= x2) and (y[j] >= y1) and (y[j] <= y2):
                 F[i, j] = 1.0
     elif ic == 2:  # Rising bubble
         for i, j in ti.ndrange(imax + 2, jmax + 2):
-            x = xm[i]
-            y = ym[j]
             r = Lx / 12
             cx, cy = Lx / 2, 2 * r
             F[i, j] = find_area(i, j, cx, cy, r)
     elif ic == 3:  # Liquid drop
         for i, j in ti.ndrange(imax + 2, jmax + 2):
-            x = xm[i]
-            y = ym[j]
             r = Lx / 12
             cx, cy = Lx / 2, Ly - 3 * r
             F[i, j] = 1.0 - find_area(i, j, cx, cy, r)
-            if y < Ly * 0.37:
+            if y[j] < Ly * 0.37:
                 F[i, j] = 1.0
 
             
@@ -513,7 +499,6 @@ def interp_velocity():
 # Start main script
 istep = 0
 nstep = 100  # Interval to update GUI
-grid_staggered()
 set_init_F(initial_condition)
 
 os.makedirs('output', exist_ok=True)  # Make dir for output
@@ -583,8 +568,6 @@ while gui.running:
         if SAVE_FIG:
             count = istep // nstep - 1            
             Fnp = F.to_numpy()
-            xm1 = xm.to_numpy()
-            ym1 = ym.to_numpy()
             fx, fy = 5, Ly / Lx * 5
             plt.figure(figsize=(fx, fy))
             plt.axis('off')
