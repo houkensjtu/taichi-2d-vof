@@ -280,13 +280,6 @@ def update_uv():
             print(f'V velocity courant number > 1, v[{i},{j}] = {v[i,j]}')
 
 
-
-@ti.kernel
-def cal_kappa():
-    for i, j in ti.ndrange((imin, imax + 1), (jmin, jmax + 1)):
-        kappa[i, j] = -(1 / dx / 2 * (mx[i + 1, j] - mx[i - 1, j]) + 1 / dy / 2 * (my[i, j + 1] - my[i, j - 1]))
-
-
 @ti.kernel
 def get_normal_young():
     for i, j in ti.ndrange((imin, imax + 1), (jmin, jmax + 1)):
@@ -311,6 +304,9 @@ def get_normal_young():
             magnitude[i, j] = ti.sqrt(mxsum[i, j] * mxsum[i, j] + mysum[i, j] * mysum[i, j])
             mx[i, j] = mxsum[i, j] / magnitude[i, j]
             my[i, j] = mysum[i, j] / magnitude[i, j]
+    for i, j in ti.ndrange((imin, imax + 1), (jmin, jmax + 1)):
+        kappa[i, j] = -(1 / dx / 2 * (mx[i + 1, j] - mx[i - 1, j]) + \
+                        1 / dy / 2 * (my[i, j + 1] - my[i, j - 1]))
         
 
 def solve_VOF_rudman():
@@ -516,7 +512,6 @@ while gui.running:
             
     cal_nu_rho()
     get_normal_young()
-    cal_kappa()
     
     # Advection
     advect_upwind()
