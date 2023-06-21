@@ -16,8 +16,8 @@ args = parser.parse_args()
 initial_condition = args.ic
 SAVE_FIG = args.s
 
-nx = 50  # Number of grid points in the x direction
-ny = 50  # Number of grid points in the y direction
+nx = 80  # Number of grid points in the x direction
+ny = 80  # Number of grid points in the y direction
 
 Lx = 0.1  # The length of the domain
 Ly = 0.1  # The width of the domain
@@ -33,8 +33,9 @@ gy = -5
 dt = 4e-6  # Use smaller dt for higher density ratio
 eps = 1e-6  # Threshold used in vfconv and f post processings
 
-MAX_TIME_STEPS = 10000
+MAX_TIME_STEPS = 5000
 MAX_ITER = 10
+OPT_ITER = 10
 # Mesh information
 imin = 1
 imax = imin + nx - 1
@@ -58,6 +59,9 @@ p_shape = (imax + 2, jmax + 2, MAX_TIME_STEPS * (MAX_ITER + 1))
 # Variables for VOF function
 F = ti.field(float, shape=field_shape, needs_grad=True)
 Ftd = ti.field(float, shape=field_shape, needs_grad=True)
+Ftarget = ti.field(float, shape=(field_shape[0], field_shape[1]), needs_grad=True)
+loss = ti.field(float, shape=(), needs_grad=True)
+
 ax = ti.field(float, shape=field_shape, needs_grad=True)
 ay = ti.field(float, shape=field_shape, needs_grad=True)
 cx = ti.field(float, shape=field_shape, needs_grad=True)
@@ -246,11 +250,11 @@ def advect_upwind(t:ti.i32):
 
 @ti.kernel
 def solve_p_jacobi(t:ti.i32, k:ti.i32):
-    # print(f'>>> Doing jacobi at step {t} and iter {k}. Updating p index {t*(MAX_ITER+1) + k + 1} from {t*(MAX_ITER +1)+k}')
     for i, j in ti.ndrange((imin, imax+1), (jmin, jmax+1)):
         rhs = rho[i, j, t] / dt * \
             ((u_star[i + 1, j, t] - u_star[i, j, t]) * dxi +
              (v_star[i, j + 1, t] - v_star[i, j, t]) * dyi)
+        ''' Remove den_corr; not used in 2dvof.py because istep is compile time constant.
         # Calculate the term due to density gradient
         drhox1 = (rho[i + 1, j - 1, t] + rho[i + 1, j, t] + rho[i + 1, j + 1, t]) / 3
         drhox2 = (rho[i - 1, j - 1, t] + rho[i - 1, j, t] + rho[i - 1, j + 1, t]) / 3                
@@ -266,6 +270,7 @@ def solve_p_jacobi(t:ti.i32, k:ti.i32):
             pass
         else:
             rhs -= den_corr
+        '''
         ae = dxi ** 2 if i != imax else 0.0
         aw = dxi ** 2 if i != imin else 0.0
         an = dyi ** 2 if j != jmax else 0.0
@@ -522,7 +527,7 @@ def interp_velocity(t:ti.i32):
     for i, j in ti.ndrange((1, imax + 1), (1, jmax + 1)):
         V[i, j] = ti.Vector([(u[i, j, t] + u[i + 1, j, t])/2, (v[i, j, t] + v[i, j + 1, t])/2])
 
-'''
+
 def forward():
     vis_option = 0  # Tag for display     
     for istep in range(MAX_TIME_STEPS-1):
@@ -598,7 +603,6 @@ def forward():
                 plt.contourf(Fnp.T, cmap=plt.cm.Blues)
                 plt.savefig(f'output/{count:06d}-f.png')
                 plt.close()
-'''        
 
 # Start main script
 istep = 0
@@ -607,80 +611,12 @@ set_init_F(initial_condition)
 os.makedirs('output', exist_ok=True)  # Make dir for output
 os.makedirs('data', exist_ok=True)  # Make dir for data save; only used for debugging
 gui = ti.GUI('VOF Solver', resolution, background_color=0xFFFFFF)
-# forward()
-vis_option = 0  # Tag for display     
-for istep in range(MAX_TIME_STEPS-1):
-    for e in gui.get_events(gui.RELEASE):
-        if e.key == gui.SPACE:
-            vis_option += 1
-        elif e.key == 'q':
-            gui.running = False
-        
-    # Calculate initial F
-    cal_nu_rho(istep)
-    get_normal_young(istep)
+vis_option = 0
 
-    # Advection
-    advect_upwind(istep)
-    set_BC(istep)
-    
-    # Pressure projection
-    for iter in range(MAX_ITER):
-        solve_p_jacobi(istep, iter)
-    copy_p_field(istep, iter)
-
-    # Velocity correction
-    update_uv(istep)
-    set_BC(istep+1)
-
-    # Advect the VOF function
-    solve_VOF_rudman(istep)
-
-    post_process_f(istep)
-    set_BC(istep+1)
-    print(f'>>> Finished debugging at {istep}')    
-
-    # Visualization
-    num_options = 5
-    if (istep % nstep) == 0:  # Output data every <nstep> steps
-        if vis_option % num_options == 0: # Display VOF distribution
-            print(f'>>> Number of steps:{istep:<5d}, Time:{istep*dt:5.2e} sec. Displaying VOF field.')
-            get_vof_field(istep + 1)
-            rgbnp = rgb_buf.to_numpy()
-            gui.set_image(cm.Blues(rgbnp))
-        
-        if vis_option % num_options == 1:  # Display the u field
-            print(f'>>> Number of steps:{istep:<5d}, Time:{istep*dt:5.2e} sec. Displaying u velocity.')
-            get_u_field(istep)
-            rgbnp = rgb_buf.to_numpy()
-            gui.set_image(cm.coolwarm(rgbnp))
-
-        if vis_option % num_options == 2:  # Display the v field
-            print(f'>>> Number of steps:{istep:<5d}, Time:{istep*dt:5.2e} sec. Displaying v velocity.')
-            get_v_field(istep)
-            rgbnp = rgb_buf.to_numpy()
-            gui.set_image(cm.coolwarm(rgbnp))
-            
-        if vis_option % num_options == 3:  # Display velocity norm
-            print(f'>>> Number of steps:{istep:<5d}, Time:{istep*dt:5.2e} sec. Displaying velocity norm.')     
-            get_vnorm_field(istep)
-            rgbnp = rgb_buf.to_numpy()
-            gui.set_image(cm.plasma(rgbnp))
-
-        if vis_option % num_options == 4:  # Display velocity vectors
-            print(f'>>> Number of steps:{istep:<5d}, Time:{istep*dt:5.2e} sec. Displaying velocity vectors.')
-            interp_velocity(istep)
-            fv.plot_arrow_field(vector_field=V, arrow_spacing=4, gui=gui)
-            
-        gui.show()
-        
-        if SAVE_FIG:
-            count = istep // nstep - 1            
-            Fnp = F.to_numpy()
-            fx, fy = 5, Ly / Lx * 5
-            plt.figure(figsize=(fx, fy))
-            plt.axis('off')
-            plt.contourf(Fnp.T, cmap=plt.cm.Blues)
-            plt.savefig(f'output/{count:06d}-f.png')
-            plt.close()
-
+for opt in range(OPT_ITER):
+    print(f'>>> >>> Optimization cycle {opt}')
+    with ti.ad.Tape(loss):
+        forward()  # Plot functions will not work in ti.ad.Tape()
+        # To be implemented
+        # compute_loss()
+        # apply_grad()
