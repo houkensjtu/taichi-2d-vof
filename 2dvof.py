@@ -6,7 +6,7 @@ import argparse
 import os
 import flow_visualization as fv
 
-ti.init(arch=ti.gpu, default_fp=ti.f32)  # Set default fp so that float=ti.f32
+ti.init(arch=ti.cpu, default_fp=ti.f32)  # Set default fp so that float=ti.f32
 
 parser = argparse.ArgumentParser()  # Get the initial condition
 # 1 - Dam Break; 2 - Rising Bubble; 3 - Droping liquid
@@ -239,7 +239,7 @@ def solve_p_jacobi():
         rhs = rho[i, j] / dt * \
             ((u_star[i + 1, j] - u_star[i, j]) * dxi +
              (v_star[i, j + 1] - v_star[i, j]) * dyi)
-
+        ''' istep is compile time constant; so the den_corr actually has no effect
         # Calculate the term due to density gradient
         drhox1 = (rho[i + 1, j - 1] + rho[i + 1, j] + rho[i + 1, j + 1]) / 3
         drhox2 = (rho[i - 1, j - 1] + rho[i - 1, j] + rho[i - 1, j + 1]) / 3                
@@ -254,7 +254,7 @@ def solve_p_jacobi():
             pass
         else:
             rhs -= den_corr
-            
+        ''' 
         ae = dxi ** 2 if i != imax else 0.0
         aw = dxi ** 2 if i != imin else 0.0
         an = dyi ** 2 if j != jmax else 0.0
