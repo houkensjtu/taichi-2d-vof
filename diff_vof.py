@@ -6,7 +6,7 @@ import argparse
 import os
 import flow_visualization as fv
 
-ti.init(arch=ti.cpu, default_fp=ti.f32, debug=True)  # Set default fp so that float=ti.f32
+ti.init(arch=ti.cpu, default_fp=ti.f32, debug=True, device_memory_fraction=0.9)  # Set default fp so that float=ti.f32
 
 parser = argparse.ArgumentParser()  # Get the initial condition
 # 1 - Dam Break; 2 - Rising Bubble; 3 - Droping liquid
@@ -33,9 +33,10 @@ gy = -5
 dt = 4e-6  # Use smaller dt for higher density ratio
 eps = 1e-6  # Threshold used in vfconv and f post processings
 
-MAX_TIME_STEPS = 3000
+MAX_TIME_STEPS = 5000
 MAX_ITER = 10
 OPT_ITER = 10
+learning_rate = 0.1
 # Mesh information
 imin = 1
 imax = imin + nx - 1
@@ -540,6 +541,16 @@ def compute_loss():
         loss[None] += (Ftarget[i, j] - F[i, j, MAX_TIME_STEPS - 1])
 
 
+@ti.kernel
+def apply_grad():
+    for i, j in ti.ndrange(imax + 2, jmax + 2):
+        # u[i, j, 0] -= learning_rate * u.grad[i, j, 0]
+        # v[i, j, 0] -= learning_rate * v.grad[i, j, 0]
+        F[i, j, 0] -= learning_rate * F.grad[i, j, 0]        
+        # print(f'u.grad = {u.grad[i,j,0]} and v.grad = {v.grad[i,j,0]}')
+        print(f'F.grad = {F.grad[i,j,0]}.')        
+    
+
 def forward():
     vis_option = 0  # Tag for display
     for istep in range(MAX_TIME_STEPS-1):
@@ -565,13 +576,13 @@ def forward():
         # Velocity correction
         update_uv(istep)
         set_BC(istep + 1)
-                
+        '''                
         # Advect the VOF function
         solve_VOF_rudman(istep)
 
         post_process_f(istep)
         set_BC(istep + 1)
-        
+        '''
         # Visualization
         num_options = 5
         plot_contour = ti.ad.no_grad(gui.contour)
@@ -623,6 +634,9 @@ def forward():
                 plt.savefig(f'output/{count:06d}-f.png')
                 plt.close()
 
+    # Compute loss as the last step of forward() pass                
+    compute_loss()
+
 
 # Start main script
 istep = 0
@@ -636,7 +650,7 @@ vis_option = 0
 for opt in range(OPT_ITER):
     print(f'>>> >>> Optimization cycle {opt}')
     with ti.ad.Tape(loss):
-        forward()  # Plot functions will not work in ti.ad.Tape()
-        # To be implemented
-        compute_loss()
-        # apply_grad()
+        forward()
+        print(f'>>> >>> Current total loss is {loss[None]}')
+    apply_grad()  # Apply gradient should be outside the Tape()
+    print(f'>>> >>> Gradient applied.')        
