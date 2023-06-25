@@ -33,7 +33,7 @@ gy = -5
 dt = 4e-6  # Use smaller dt for higher density ratio
 eps = 1e-6  # Threshold used in vfconv and f post processings
 
-MAX_TIME_STEPS = 5000
+MAX_TIME_STEPS = 3000
 MAX_ITER = 10
 OPT_ITER = 10
 # Mesh information
@@ -153,9 +153,15 @@ def set_init_F(ic:ti.i32):
         x2 = Lx / 3
         y1 = 0.0
         y2 = Ly / 2
+        r = Ly / 4
+        # Set initial F field
         for i, j in ti.ndrange(imax + 2, jmax + 2):
             if (x[i] >= x1) and (x[i] <= x2) and (y[j] >= y1) and (y[j] <= y2):
                 F[i, j, 0] = 1.0
+        # Set target F field for autodiff
+        for i, j in ti.ndrange(imax + 2, jmax + 2):
+            if (x[i]**2 + y[j]**2) - r**2 < 0:
+                Ftarget[i, j] = 1.0
 
     elif ic == 2:  # Rising bubble
         for i, j in ti.ndrange(imax + 2, jmax + 2):
@@ -528,8 +534,14 @@ def interp_velocity(t:ti.i32):
         V[i, j] = ti.Vector([(u[i, j, t] + u[i + 1, j, t])/2, (v[i, j, t] + v[i, j + 1, t])/2])
 
 
+@ti.kernel
+def compute_loss():
+    for i, j in ti.ndrange(imax + 2, jmax + 2):
+        loss[None] += (Ftarget[i, j] - F[i, j, MAX_TIME_STEPS - 1])
+
+
 def forward():
-    vis_option = 0  # Tag for display     
+    vis_option = 0  # Tag for display
     for istep in range(MAX_TIME_STEPS-1):
         for e in gui.get_events(gui.RELEASE):
             if e.key == gui.SPACE:
@@ -559,39 +571,46 @@ def forward():
 
         post_process_f(istep)
         set_BC(istep + 1)
-
+        
         # Visualization
         num_options = 5
+        plot_contour = ti.ad.no_grad(gui.contour)
+        plot_vector = ti.ad.no_grad(gui.vector_field)
         if (istep % nstep) == 0:  # Output data every <nstep> steps
             if vis_option % num_options == 0: # Display VOF distribution
                 print(f'>>> Number of steps:{istep:<5d}, Time:{istep*dt:5.2e} sec. Displaying VOF field.')            
                 get_vof_field(istep + 1)
-                rgbnp = rgb_buf.to_numpy()
-                gui.set_image(cm.Blues(rgbnp))
+                # rgbnp = rgb_buf.to_numpy()
+                # gui.set_image(cm.Blues(rgbnp))
+                plot_contour(rgb_buf)
 
             if vis_option % num_options == 1:  # Display the u field
                 print(f'>>> Number of steps:{istep:<5d}, Time:{istep*dt:5.2e} sec. Displaying u velocity.')
                 get_u_field(istep)
-                rgbnp = rgb_buf.to_numpy()
-                gui.set_image(cm.coolwarm(rgbnp))
+                # rgbnp = rgb_buf.to_numpy()
+                # gui.set_image(cm.coolwarm(rgbnp))
+                plot_contour(rgb_buf)
 
             if vis_option % num_options == 2:  # Display the v field
                 print(f'>>> Number of steps:{istep:<5d}, Time:{istep*dt:5.2e} sec. Displaying v velocity.')
                 get_v_field(istep)
-                rgbnp = rgb_buf.to_numpy()
-                gui.set_image(cm.coolwarm(rgbnp))
-
+                # rgbnp = rgb_buf.to_numpy()
+                # gui.set_image(cm.coolwarm(rgbnp))
+                plot_contour(rgb_buf)
+                
             if vis_option % num_options == 3:  # Display velocity norm
                 print(f'>>> Number of steps:{istep:<5d}, Time:{istep*dt:5.2e} sec. Displaying velocity norm.')            
                 get_vnorm_field(istep)
-                rgbnp = rgb_buf.to_numpy()
-                gui.set_image(cm.plasma(rgbnp))
-
+                # rgbnp = rgb_buf.to_numpy()
+                # gui.set_image(cm.plasma(rgbnp))
+                plot_contour(rgb_buf)
+                
             if vis_option % num_options == 4:  # Display velocity vectors
                 print(f'>>> Number of steps:{istep:<5d}, Time:{istep*dt:5.2e} sec. Displaying velocity vectors.')
                 interp_velocity(istep)
-                fv.plot_arrow_field(vector_field=V, arrow_spacing=4, gui=gui)
-            
+                # fv.plot_arrow_field(vector_field=V, arrow_spacing=4, gui=gui)
+                plot_vector(V, arrow_spacing=2, color=0x000000)
+
             gui.show()
         
             if SAVE_FIG:
@@ -603,6 +622,7 @@ def forward():
                 plt.contourf(Fnp.T, cmap=plt.cm.Blues)
                 plt.savefig(f'output/{count:06d}-f.png')
                 plt.close()
+
 
 # Start main script
 istep = 0
@@ -618,5 +638,5 @@ for opt in range(OPT_ITER):
     with ti.ad.Tape(loss):
         forward()  # Plot functions will not work in ti.ad.Tape()
         # To be implemented
-        # compute_loss()
+        compute_loss()
         # apply_grad()
