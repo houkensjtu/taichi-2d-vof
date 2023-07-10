@@ -28,15 +28,15 @@ nu_g = 1.5e-5
 sigma = ti.field(dtype=float, shape=())
 sigma[None] = 0.007
 gx = 0
-gy = -5
+gy = -1000
 
 dt = 4e-6  # Use smaller dt for higher density ratio
 eps = 1e-6  # Threshold used in vfconv and f post processings
 
-MAX_TIME_STEPS = 5000
+MAX_TIME_STEPS = 1000
 MAX_ITER = 10
-OPT_ITER = 10
-learning_rate = 0.1
+OPT_ITER = 100
+learning_rate = 0.02
 # Mesh information
 imin = 1
 imax = imin + nx - 1
@@ -58,8 +58,9 @@ field_shape = (imax + 2, jmax + 2, MAX_TIME_STEPS)
 p_shape = (imax + 2, jmax + 2, MAX_TIME_STEPS * (MAX_ITER + 1))
 
 # Variables for VOF function
-F = ti.field(float, shape=field_shape, needs_grad=True)
-Ftd = ti.field(float, shape=field_shape, needs_grad=True)
+F = ti.field(float, shape=(imax + 2, jmax + 2, 2 * MAX_TIME_STEPS + 1), needs_grad=True)
+Ftd_x = ti.field(float, shape=field_shape, needs_grad=True)
+Ftd_y = ti.field(float, shape=field_shape, needs_grad=True)
 Ftarget = ti.field(float, shape=(field_shape[0], field_shape[1]), needs_grad=True)
 loss = ti.field(float, shape=(), needs_grad=True)
 
@@ -67,8 +68,10 @@ ax = ti.field(float, shape=field_shape, needs_grad=True)
 ay = ti.field(float, shape=field_shape, needs_grad=True)
 cx = ti.field(float, shape=field_shape, needs_grad=True)
 cy = ti.field(float, shape=field_shape, needs_grad=True)
-rp = ti.field(float, shape=field_shape, needs_grad=True)
-rm = ti.field(float, shape=field_shape, needs_grad=True)
+rp_x = ti.field(float, shape=field_shape, needs_grad=True)
+rm_x = ti.field(float, shape=field_shape, needs_grad=True)
+rp_y = ti.field(float, shape=field_shape, needs_grad=True)
+rm_y = ti.field(float, shape=field_shape, needs_grad=True)
 
 # Variables for N-S equation
 u = ti.field(float, shape=field_shape, needs_grad=True)
@@ -158,10 +161,7 @@ def set_init_F(ic:ti.i32):
         # Set initial F field
         for i, j in ti.ndrange(imax + 2, jmax + 2):
             if (x[i] >= x1) and (x[i] <= x2) and (y[j] >= y1) and (y[j] <= y2):
-                F[i, j, 0] = 1.0
-        # Set target F field for autodiff
-        for i, j in ti.ndrange(imax + 2, jmax + 2):
-            if (x[i]**2 + y[j]**2) - r**2 < 0:
+                # F[i, j, 0] = 1.0
                 Ftarget[i, j] = 1.0
 
     elif ic == 2:  # Rising bubble
@@ -185,26 +185,26 @@ def set_BC(t:ti.i32):
         # bottom: slip 
         u[i, jmin - 1, t] = u[i, jmin, t]
         v[i, jmin, t] = 0
-        F[i, jmin - 1, t] = F[i, jmin, t]
+        F[i, jmin - 1, 2 * t] = F[i, jmin, 2 * t]
         p[i, jmin - 1, t * (MAX_ITER + 1)] = p[i, jmin, t * (MAX_ITER + 1)]
         rho[i, jmin - 1, t] = rho[i, jmin, t]                
         # top: open
         u[i, jmax + 1, t] = u[i, jmax, t]
         v[i, jmax + 1, t] = 0 #v[i, jmax, t]
-        F[i, jmax + 1, t] = F[i, jmax, t]
+        F[i, jmax + 1, 2 * t] = F[i, jmax, 2 * t]
         p[i, jmax + 1, t * (MAX_ITER + 1)] = p[i, jmax, t * (MAX_ITER + 1)]
         rho[i, jmax + 1, t] = rho[i, jmax, t]                
     for j in ti.ndrange(jmax + 2):
         # left: slip
         u[imin, j, t] = 0
         v[imin - 1, j, t] = v[imin, j, t]
-        F[imin - 1, j, t] = F[imin, j, t]
+        F[imin - 1, j, 2 * t] = F[imin, j, 2 * t]
         p[imin - 1, j, t * (MAX_ITER + 1)] = p[imin, j, t * (MAX_ITER + 1)]
         rho[imin - 1, j, t] = rho[imin, j, t]                
         # right: slip
         u[imax + 1, j, t] = 0
         v[imax + 1, j, t] = v[imax, j, t]
-        F[imax + 1, j, t] = F[imax, j, t]
+        F[imax + 1, j, 2 * t] = F[imax, j, 2 * t]
         p[imax + 1, j, t * (MAX_ITER + 1)] = p[imax, j, t * (MAX_ITER + 1)]
         rho[imax + 1, j, t] = rho[imax, j, t]                
 
@@ -217,9 +217,8 @@ def var(a, b, c):    # Find the median of a,b, and c
 
 @ti.kernel
 def cal_nu_rho(t:ti.i32):
-    # print(f'>>> rho_g = {rho_g}, rho_l={rho_l} in cal_nu_rho at {t}.')
     for i, j in ti.ndrange(field_shape[0], field_shape[1]):
-        F = var(0.0, 1.0, F[i, j, t])
+        F = var(0.0, 1.0, F[i, j, 2 * t])
         rho[i, j, t] = rho_g * (1 - F) + rho_l * F
         nu[i, j, t] = nu_l * F + nu_g * (1.0 - F) 
 
@@ -232,7 +231,7 @@ def advect_upwind(t:ti.i32):
         dudx = (u[i,j, t] - u[i-1,j, t]) * dxi if u[i,j, t] > 0 else (u[i+1,j, t]-u[i,j, t])*dxi
         dudy = (u[i,j, t] - u[i,j-1, t]) * dyi if v_here > 0 else (u[i,j+1, t]-u[i,j, t])*dyi
         kappa_ave = (kappa[i, j, t] + kappa[i - 1, j, t]) / 2.0
-        fx_kappa = - sigma[None] * (F[i, j, t] - F[i - 1, j, t]) * kappa_ave / dx        
+        fx_kappa = - sigma[None] * (F[i, j, 2 * t] - F[i - 1, j, 2 * t]) * kappa_ave / dx   # F(2*t) is F at t time step
         u_star[i, j, t] = (
             u[i, j, t] + dt *
             (nu[i, j, t] * (u[i - 1, j, t] - 2 * u[i, j, t] + u[i + 1, j, t]) * dxi**2
@@ -245,7 +244,7 @@ def advect_upwind(t:ti.i32):
         dvdx = (v[i,j, t] - v[i-1,j, t]) * dxi if u_here > 0 else (v[i+1,j, t] - v[i,j, t]) * dxi
         dvdy = (v[i,j, t] - v[i,j-1, t]) * dyi if v[i,j, t] > 0 else (v[i,j+1, t] - v[i,j, t]) * dyi
         kappa_ave = (kappa[i, j, t] + kappa[i, j - 1, t]) / 2.0
-        fy_kappa = - sigma[None] * (F[i, j, t] - F[i, j - 1, t]) * kappa_ave / dy        
+        fy_kappa = - sigma[None] * (F[i, j, 2 * t] - F[i, j - 1, 2 * t]) * kappa_ave / dy        
         v_star[i, j, t] = (
             v[i, j, t] + dt *
             (nu[i, j, t] * (v[i - 1, j, t] - 2 * v[i, j, t] + v[i + 1, j, t]) * dxi**2
@@ -299,7 +298,6 @@ def copy_p_field(t:ti.i32, k:ti.i32):
 
 @ti.kernel
 def update_uv(t:ti.i32):
-    # print(f'>>> rho.shape={rho.shape} at {t} in update_uv.')
     for i, j in ti.ndrange((imin + 1, imax + 1), (jmin, jmax + 1)):
         r = (rho[i, j, t] + rho[i-1, j, t]) * 0.5
         u[i, j, t+1] = u_star[i, j, t] \
@@ -318,17 +316,16 @@ def update_uv(t:ti.i32):
 
 @ti.kernel
 def get_normal_young(t:ti.i32):
-    # print(f'>>> mx1.shape={mx1.shape}, kappa.shape={kappa.shape} at {t} in get_normal_young.')    
     for i, j in ti.ndrange((imin, imax + 1), (jmin, jmax + 1)):
         # Points in between the outermost boundaries
-        mx1[i, j, t] = -1 / (2 * dx) * (F[i + 1, j + 1, t] + F[i + 1, j, t] - F[i, j + 1, t] - F[i, j, t])  
-        my1[i, j, t] = -1 / (2 * dy) * (F[i + 1, j + 1, t] - F[i + 1, j, t] + F[i, j + 1, t] - F[i, j, t])
-        mx2[i, j, t] = -1 / (2 * dx) * (F[i + 1, j, t] + F[i + 1, j - 1, t] - F[i, j, t] - F[i, j - 1, t])  
-        my2[i, j, t] = -1 / (2 * dy) * (F[i + 1, j, t] - F[i + 1, j - 1, t] + F[i, j, t] - F[i, j - 1, t])
-        mx3[i, j, t] = -1 / (2 * dx) * (F[i, j, t] + F[i, j - 1, t] - F[i - 1, j, t] - F[i - 1, j - 1, t])  
-        my3[i, j, t] = -1 / (2 * dy) * (F[i, j, t] - F[i, j - 1, t] + F[i - 1, j, t] - F[i - 1, j - 1, t])
-        mx4[i, j, t] = -1 / (2 * dx) * (F[i, j + 1, t] + F[i, j, t] - F[i - 1, j + 1, t] - F[i - 1, j, t])  
-        my4[i, j, t] = -1 / (2 * dy) * (F[i, j + 1, t] - F[i, j, t] + F[i - 1, j + 1, t] - F[i - 1, j, t])
+        mx1[i, j, t] = -1 / (2 * dx) * (F[i + 1, j + 1, 2 * t] + F[i + 1, j, 2 * t] - F[i, j + 1, 2 * t] - F[i, j, 2 * t])  
+        my1[i, j, t] = -1 / (2 * dy) * (F[i + 1, j + 1, 2 * t] - F[i + 1, j, 2 * t] + F[i, j + 1, 2 * t] - F[i, j, 2 * t])
+        mx2[i, j, t] = -1 / (2 * dx) * (F[i + 1, j, 2 * t] + F[i + 1, j - 1, 2 * t] - F[i, j, 2 * t] - F[i, j - 1, 2 * t])  
+        my2[i, j, t] = -1 / (2 * dy) * (F[i + 1, j, 2 * t] - F[i + 1, j - 1, 2 * t] + F[i, j, 2 * t] - F[i, j - 1, 2 * t])
+        mx3[i, j, t] = -1 / (2 * dx) * (F[i, j, 2 * t] + F[i, j - 1, 2 * t] - F[i - 1, j, 2 * t] - F[i - 1, j - 1, 2 * t])  
+        my3[i, j, t] = -1 / (2 * dy) * (F[i, j, 2 * t] - F[i, j - 1, 2 * t] + F[i - 1, j, 2 * t] - F[i - 1, j - 1, 2 * t])
+        mx4[i, j, t] = -1 / (2 * dx) * (F[i, j + 1, 2 * t] + F[i, j, 2 * t] - F[i - 1, j + 1, 2 * t] - F[i - 1, j, 2 * t])  
+        my4[i, j, t] = -1 / (2 * dy) * (F[i, j + 1, 2 * t] - F[i, j, 2 * t] + F[i - 1, j + 1, 2 * t] - F[i - 1, j, 2 * t])
         # Summing of mx and my components for normal vector
         mxsum[i, j, t] = (mx1[i, j, t] + mx2[i, j, t] + mx3[i, j, t] + mx4[i, j, t]) / 4
         mysum[i, j, t] = (my1[i, j, t] + my2[i, j, t] + my3[i, j, t] + my4[i, j, t]) / 4
@@ -348,148 +345,105 @@ def get_normal_young(t:ti.i32):
         
 def solve_VOF_rudman(t):
     if t % 2 == 0:
-        fct_y_sweep(t)
-        fct_x_sweep(t)
+        fct_y_sweep(t, 0, 1e-6)
+        fct_x_sweep(t, 1, 1e-6)
     else:
-        fct_x_sweep(t)
-        fct_y_sweep(t)
+        fct_x_sweep(t, 0, 1e-6)
+        fct_y_sweep(t, 1, 1e-6)
 
 
 @ti.kernel
-def fct_x_sweep(t:ti.i32): # F(t), u(t+1) -> Ftd(t)
+def fct_x_sweep(t:ti.i32, offset:ti.i32, eps:ti.f32):
     for i, j in ti.ndrange((imin, imax + 1), (jmin, jmax + 1)):
-        dv = dx * dy - dt * dy * (u[i + 1, j,t + 1] - u[i, j, t + 1])
-        fl_L = u[i, j, t + 1] * dt * F[i - 1, j, t] if u[i, j, t + 1] >= 0 else u[i, j, t + 1] * dt * F[i, j, t]
-        fr_L = u[i + 1, j, t+1] * dt * F[i, j, t] if u[i + 1, j, t+1] >= 0 else u[i + 1, j, t+1] * dt * F[i + 1, j, t]
-        ft_L = 0
-        fb_L = 0
-        Ftd[i, j, t] = (F[i, j, t] + (fl_L - fr_L + fb_L - ft_L) * dy / (dx * dy)) * dx * dy / dv
-        if Ftd[i, j, t] > 1. or Ftd[i, j, t] < 0:
-            Ftd[i, j, t] = var(0, 1, Ftd[i, j, t])
-        
-    for i, j in ti.ndrange((imin, imax + 1), (jmin, jmax + 1)):
-        fmax = ti.max(Ftd[i, j, t], Ftd[i - 1, j, t], Ftd[i + 1, j, t])
-        fmin = ti.min(Ftd[i, j, t], Ftd[i - 1, j, t], Ftd[i + 1, j, t])
-        
-        fl_L = u[i, j, t+1] * dt * F[i - 1, j, t] if u[i, j, t+1] >= 0 else u[i, j, t+1] * dt * F[i, j, t]
-        fr_L = u[i + 1, j, t+1] * dt * F[i, j, t] if u[i + 1, j, t+1] >= 0 else u[i + 1, j, t+1] * dt * F[i + 1, j, t]
-        ft_L = 0
-        fb_L = 0
-        
-        fl_H = u[i, j, t+1] * dt * F[i - 1, j, t] if u[i, j, t+1] <= 0 else u[i, j, t+1] * dt * F[i, j, t]
-        fr_H = u[i + 1, j, t+1] * dt * F[i, j, t] if u[i + 1, j, t+1] <= 0 else u[i + 1, j, t+1] * dt * F[i + 1, j, t]
-        ft_H = 0
-        fb_H = 0
+        dv = dx * dy - dt * dy * (u[i + 1, j, t + 1] - u[i, j, t + 1])
+        fl_L = u[i, j, t + 1] * dt * F[i - 1, j, 2 * t + offset] if u[i, j, t + 1] >= 0 else u[i, j, t + 1] * dt * F[i, j, 2 * t + offset]
+        fr_L = u[i + 1, j, t + 1] * dt * F[i, j, 2 * t + offset] if u[i + 1, j, t + 1] >= 0 else u[i + 1, j, t + 1] * dt * F[i + 1, j, 2 * t + offset]
+        Ftd_x[i, j, t] = F[i, j, 2 * t + offset] + (fl_L - fr_L) * dy / (dx * dy)  * dx * dy / dv
 
-        ax[i + 1, j, t] = fr_H - fr_L
+    for i, j in ti.ndrange((imin, imax + 2), (jmin, jmax + 1)):
+        fl_L = u[i, j, t + 1] * dt * F[i - 1, j, 2 * t + offset] if u[i, j, t + 1] >= 0 else u[i, j, t + 1] * dt * F[i, j, 2 * t + offset]
+        fl_H = u[i, j, t + 1] * dt * F[i - 1, j, 2 * t + offset] if u[i, j, t + 1] <= 0 else u[i, j, t + 1] * dt * F[i, j, 2 * t + offset]
         ax[i, j, t] = fl_H - fl_L
-        ay[i, j + 1, t] = 0
-        ay[i, j, t] = 0
 
-        pp = ti.max(0, ax[i, j, t]) - ti.min(0, ax[i + 1, j, t]) + ti.max(0, ay[i, j, t]) - ti.min(0, ay[i, j + 1, t])
-        qp = (fmax - Ftd[i, j, t]) * dx
-        if pp > 0:
-            rp[i, j, t] = ti.min(1, qp / pp)
+    for i, j in ti.ndrange((imin, imax + 1), (jmin, jmax + 1)):        
+        fmax = ti.max(Ftd_x[i, j, t], Ftd_x[i - 1, j, t], Ftd_x[i + 1, j, t])
+        fmin = ti.min(Ftd_x[i, j, t], Ftd_x[i - 1, j, t], Ftd_x[i + 1, j, t])
+
+        pp = ti.max(0, ax[i, j, t]) - ti.min(0, ax[i + 1, j, t])
+        qp = (fmax - Ftd_x[i, j, t]) * dx
+        if pp > eps:
+            rp_x[i, j, t] = ti.min(1, qp / pp)
         else:
-            rp[i, j, t] = 0.0
-        pm = ti.max(0, ax[i + 1, j, t]) - ti.min(0, ax[i, j, t]) + ti.max(0, ay[i, j + 1, t]) - ti.min(0, ay[i, j, t])
-        qm = (Ftd[i, j, t] - fmin) * dx
-        if pm > 0:
-            rm[i, j, t] = ti.min(1, qm / pm)
+            rp_x[i, j, t] = 0.0
+
+        pm = ti.max(0, ax[i + 1, j, t]) - ti.min(0, ax[i, j, t])
+        qm = (Ftd_x[i, j, t] - fmin) * dx
+        if pm > eps:
+            rm_x[i, j, t] = ti.min(1, qm / pm)
         else:
-            rm[i, j, t] = 0.0
+            rm_x[i, j, t] = 0.0
 
     for i, j in ti.ndrange((imin, imax + 1), (jmin, jmax + 1)):            
         if ax[i + 1, j, t] >= 0:
-            cx[i + 1, j, t] = ti.min(rp[i + 1, j, t], rm[i, j, t])
+            cx[i + 1, j, t] = ti.min(rp_x[i + 1, j, t], rm_x[i, j, t])
         else:
-            cx[i + 1, j, t] = ti.min(rp[i, j, t], rm[i + 1, j, t])
-
-        if ay[i, j + 1, t] >= 0:
-            cy[i, j + 1, t] = ti.min(rp[i, j + 1, t], rm[i, j, t])
-        else:
-            cy[i, j + 1, t] = ti.min(rp[i, j, t], rm[i, j + 1, t])
+            cx[i + 1, j, t] = ti.min(rp_x[i, j, t], rm_x[i + 1, j, t])
 
     for i, j in ti.ndrange((imin, imax + 1), (jmin, jmax + 1)):
-        dv = dx * dy - dt * dy * (u[i + 1, j, t+1] - u[i, j, t+1])        
-        F[i, j, t+1] = Ftd[i, j, t] - ((ax[i + 1, j, t] * cx[i + 1, j, t] - \
-                               ax[i, j, t] * cx[i, j, t] + \
-                               ay[i, j + 1, t] * cy[i, j + 1, t] -\
-                               ay[i, j, t] * cy[i, j, t]) / (dy)) * dx * dy / dv
-        F[i, j, t+1] = var(0, 1, F[i, j, t+1])  # Problematic
+        dv = dx * dy - dt * dy * (u[i + 1, j, t + 1] - u[i, j, t + 1])
+        F[i, j, 2 * t + offset + 1] = Ftd_x[i, j, t] - ((ax[i + 1, j, t] * cx[i + 1, j, t] - \
+                               ax[i, j, t] * cx[i, j, t]) / dy) * dx * dy / dv
 
 
 @ti.kernel
-def fct_y_sweep(t:ti.i32):
+def fct_y_sweep(t:ti.i32, offset:ti.i32, eps:ti.f32):
     for i, j in ti.ndrange((imin, imax + 1), (jmin, jmax + 1)):
-        dv = dx * dy - dt * dx * (v[i, j + 1, t+1] - v[i, j, t+1])
-        fl_L = 0
-        fr_L = 0
-        ft_L = v[i, j + 1, t+1] * dt * F[i, j, t] if v[i, j + 1, t+1] >= 0 else v[i, j + 1, t+1] * dt * F[i, j + 1, t]
-        fb_L = v[i, j, t+1] * dt * F[i, j - 1, t] if v[i, j, t+1] >= 0 else v[i, j, t+1] * dt * F[i, j, t]
-        Ftd[i, j, t] = (F[i, j, t] + (fl_L - fr_L + fb_L - ft_L) * dy / (dx * dy)) * dx * dy / dv
-        if Ftd[i, j, t] > 1. or Ftd[i, j, t] < 0:
-            Ftd[i, j, t] = var(0, 1, Ftd[i, j, t])
+        dv = dx * dy - dt * dx * (v[i, j + 1, t + 1] - v[i, j, t + 1])
+        ft_L = v[i, j + 1, t + 1] * dt * F[i, j, 2 * t + offset] if v[i, j + 1, t + 1] >= 0 else v[i, j + 1, t + 1] * dt * F[i, j + 1, 2 * t + offset]
+        fb_L = v[i, j, t + 1] * dt * F[i, j - 1, 2 * t + offset] if v[i, j, t + 1] >= 0 else v[i, j, t + 1] * dt * F[i, j, 2 * t + offset]
+        Ftd_y[i, j, t] = F[i, j, 2 * t + offset] + (fb_L - ft_L) * dy / (dx * dy) * dx * dy / dv
 
-    for i, j in ti.ndrange((imin, imax + 1), (jmin, jmax + 1)):
-        fmax = ti.max(Ftd[i, j, t], Ftd[i, j - 1, t], Ftd[i, j + 1, t])
-        fmin = ti.min(Ftd[i, j, t], Ftd[i, j - 1, t], Ftd[i, j + 1, t]) 
-        
-        fl_L = 0
-        fr_L = 0
-        ft_L = v[i, j + 1, t+1] * dt * F[i, j, t] if v[i, j + 1, t+1] >= 0 else v[i, j + 1, t+1] * dt * F[i, j + 1, t]
-        fb_L = v[i, j, t+1] * dt * F[i, j - 1, t] if v[i, j, t+1] >= 0 else v[i, j, t+1] * dt * F[i, j, t]
-        
-        fl_H = 0
-        fr_H = 0
-        ft_H = v[i, j + 1, t+1] * dt * F[i, j, t] if v[i, j + 1, t+1] <= 0 else v[i, j + 1, t+1] * dt * F[i, j + 1, t]
-        fb_H = v[i, j, t+1] * dt * F[i, j - 1, t] if v[i, j, t+1] <= 0 else v[i, j, t+1] * dt * F[i, j, t]
-
-        ax[i + 1, j, t] = 0
-        ax[i, j, t] = 0
-        ay[i, j + 1, t] = ft_H - ft_L
+    for i, j in ti.ndrange((imin, imax + 1), (jmin, jmax + 2)):
+        fb_L = v[i, j, t + 1] * dt * F[i, j - 1, 2 * t + offset] if v[i, j, t + 1] >= 0 else v[i, j, t + 1] * dt * F[i, j, 2 * t + offset]
+        fb_H = v[i, j, t + 1] * dt * F[i, j - 1, 2 * t + offset] if v[i, j, t + 1] <= 0 else v[i, j, t + 1] * dt * F[i, j, 2 * t + offset]
         ay[i, j, t] = fb_H - fb_L
 
-        pp = ti.max(0, ax[i, j, t]) - ti.min(0, ax[i + 1, j, t]) + ti.max(0, ay[i, j, t]) - ti.min(0, ay[i, j + 1, t])
-        qp = (fmax - Ftd[i, j, t]) * dx
-        if pp > 0:
-            rp[i, j, t] = ti.min(1, qp / pp)
+    for i, j in ti.ndrange((imin, imax + 1), (jmin, jmax + 1)):        
+        fmax = ti.max(Ftd_y[i, j, t], Ftd_y[i, j - 1, t], Ftd_y[i, j + 1, t])
+        fmin = ti.min(Ftd_y[i, j, t], Ftd_y[i, j - 1, t], Ftd_y[i, j + 1, t]) 
+
+        # eps = 1e-4
+        pp = ti.max(0, ay[i, j, t]) - ti.min(0, ay[i, j + 1, t])
+        qp = (fmax - Ftd_y[i, j, t]) * dx
+        if pp > eps:
+            rp_y[i, j, t] = ti.min(1, qp / pp)
         else:
-            rp[i, j, t] = 0.0
-        pm = ti.max(0, ax[i + 1, j, t]) - ti.min(0, ax[i, j, t]) + ti.max(0, ay[i, j + 1, t]) - ti.min(0, ay[i, j, t])
-        qm = (Ftd[i, j, t] - fmin) * dx
-        if pm > 0:
-            rm[i, j, t] = ti.min(1, qm / pm)
+            rp_y[i, j, t] = 0.0
+
+        pm = ti.max(0, ay[i, j + 1, t]) - ti.min(0, ay[i, j, t])
+        qm = (Ftd_y[i, j, t] - fmin) * dx
+        if pm > eps:
+            rm_y[i, j, t] = ti.min(1, qm / pm)
         else:
-            rm[i, j, t] = 0.0
+            rm_y[i, j, t] = 0.0
 
     for i, j in ti.ndrange((imin, imax + 1), (jmin, jmax + 1)):        
-        if ax[i + 1, j, t] >= 0:
-            cx[i + 1, j, t] = ti.min(rp[i + 1, j, t], rm[i, j, t])
-        else:
-            cx[i + 1, j, t] = ti.min(rp[i, j, t], rm[i + 1, j, t])
-
         if ay[i, j + 1, t] >= 0:
-            cy[i, j + 1, t] = ti.min(rp[i, j + 1, t], rm[i, j, t])
+            cy[i, j + 1, t] = ti.min(rp_y[i, j + 1, t], rm_y[i, j, t])
         else:
-            cy[i, j + 1, t] = ti.min(rp[i, j, t], rm[i, j + 1, t])
-
+            cy[i, j + 1, t] = ti.min(rp_y[i, j, t], rm_y[i, j + 1, t])
 
     for i, j in ti.ndrange((imin, imax + 1), (jmin, jmax + 1)):
-        dv = dx * dy - dt * dx * (v[i, j + 1, t+1] - v[i, j, t+1])        
-        F[i, j, t+1] = Ftd[i, j,t] - ((ax[i + 1, j, t] * cx[i + 1, j, t] - \
-                               ax[i, j, t] * cx[i, j, t] + \
-                               ay[i, j + 1, t] * cy[i, j + 1, t] -\
-                               ay[i, j, t] * cy[i, j, t]) / (dy)) * dx * dy / dv
-
-        F[i, j, t+1] = var(0, 1, F[i, j, t+1])
+        dv = dx * dy - dt * dx * (v[i, j + 1, t + 1] - v[i, j, t + 1])
+        F[i, j, 2 * t + offset + 1] = Ftd_y[i, j, t] - ((ay[i, j + 1, t] * cy[i, j + 1, t] -\
+                               ay[i, j, t] * cy[i, j, t]) / dy) * dx * dy / dv
         
 
         
 @ti.kernel        
 def post_process_f(t:ti.i32):
     for i, j in ti.ndrange((imin, imax+1), (jmin, jmax+1)):
-        F[i, j, t+1] = var(F[i, j, t+1], 0, 1)
+        F[i, j, 2 * t + 2] = var(F[i, j, 2 * t + 2], 0, 1)
 
 
 @ti.ad.no_grad
@@ -497,8 +451,16 @@ def post_process_f(t:ti.i32):
 def get_vof_field(t:ti.i32):
     r = resolution[0] // field_shape[0] + 1
     for i, j in rgb_buf:
-        rgb_buf[i, j] = F[i // r, j // r, t]
+        rgb_buf[i, j] = F[i // r, j // r, 2 * t]
 
+
+@ti.ad.no_grad
+@ti.kernel
+def get_vof_target_field():
+    r = resolution[0] // field_shape[0] + 1
+    for i, j in rgb_buf:
+        rgb_buf[i, j] = Ftarget[i // r, j // r]
+        
 
 @ti.ad.no_grad
 @ti.kernel
@@ -538,22 +500,24 @@ def interp_velocity(t:ti.i32):
 @ti.kernel
 def compute_loss():
     for i, j in ti.ndrange(imax + 2, jmax + 2):
-        loss[None] += (Ftarget[i, j] - F[i, j, MAX_TIME_STEPS - 1])
+        loss[None] += ti.abs(Ftarget[i, j] - F[i, j, 2 * MAX_TIME_STEPS - 2])
 
 
 @ti.kernel
 def apply_grad():
-    for i, j in ti.ndrange(imax + 2, jmax + 2):
+    for i, j in ti.ndrange((1, imax + 1), (1, jmax + 1)):
         # u[i, j, 0] -= learning_rate * u.grad[i, j, 0]
         # v[i, j, 0] -= learning_rate * v.grad[i, j, 0]
-        F[i, j, 0] -= learning_rate * F.grad[i, j, 0]        
+        if ti.abs(F.grad[i, j, 0]) < 5.:
+            # print(f'>>> F.grad at {i},{j} = {F.grad[i, j, 0]}')
+            F[i, j, 0] -= learning_rate * F.grad[i, j, 0]
+            F[i, j, 0] = var(0, 1, F[i, j, 0])
         # print(f'u.grad = {u.grad[i,j,0]} and v.grad = {v.grad[i,j,0]}')
-        print(f'F.grad = {F.grad[i,j,0]}.')        
     
 
 def forward():
     vis_option = 0  # Tag for display
-    for istep in range(MAX_TIME_STEPS-1):
+    for istep in range(MAX_TIME_STEPS - 1):
         for e in gui.get_events(gui.RELEASE):
             if e.key == gui.SPACE:
                 vis_option += 1
@@ -576,13 +540,12 @@ def forward():
         # Velocity correction
         update_uv(istep)
         set_BC(istep + 1)
-        '''                
+
         # Advect the VOF function
         solve_VOF_rudman(istep)
-
         post_process_f(istep)
         set_BC(istep + 1)
-        '''
+
         # Visualization
         num_options = 5
         plot_contour = ti.ad.no_grad(gui.contour)
@@ -591,6 +554,8 @@ def forward():
             if vis_option % num_options == 0: # Display VOF distribution
                 print(f'>>> Number of steps:{istep:<5d}, Time:{istep*dt:5.2e} sec. Displaying VOF field.')            
                 get_vof_field(istep + 1)
+                # get_vof_target_field()  # To display the target
+                # get_vof_field(0)                
                 # rgbnp = rgb_buf.to_numpy()
                 # gui.set_image(cm.Blues(rgbnp))
                 plot_contour(rgb_buf)
