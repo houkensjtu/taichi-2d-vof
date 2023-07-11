@@ -6,7 +6,7 @@ import argparse
 import os
 import flow_visualization as fv
 
-ti.init(arch=ti.cpu, default_fp=ti.f32, debug=True, device_memory_fraction=0.9)  # Set default fp so that float=ti.f32
+ti.init(arch=ti.cpu, default_fp=ti.f32, debug=False, device_memory_fraction=0.9)  # Set default fp so that float=ti.f32
 
 parser = argparse.ArgumentParser()  # Get the initial condition
 # 1 - Dam Break; 2 - Rising Bubble; 3 - Droping liquid
@@ -105,7 +105,7 @@ magnitude = ti.field(float, shape=field_shape, needs_grad=True)
 
 # For visualization
 resolution = (400, 400)
-rgb_buf = ti.field(dtype=float, shape=resolution)
+rgb_buf = ti.field(dtype=float, shape=(field_shape[0], field_shape[1]))
 
 print(f'>>> A VOF solver written in Taichi; Press q to exit.')
 print(f'>>> Grid resolution: {nx} x {ny}, dt = {dt:4.2e}')
@@ -448,52 +448,22 @@ def post_process_f(t:ti.i32):
 
 @ti.ad.no_grad
 @ti.kernel
-def get_vof_field(t:ti.i32):
-    r = resolution[0] // field_shape[0] + 1
+def get_field_to_buf(src:ti.template(), t:ti.i32):
     for i, j in rgb_buf:
-        rgb_buf[i, j] = F[i // r, j // r, 2 * t]
-
-
-@ti.ad.no_grad
-@ti.kernel
-def get_vof_target_field():
-    r = resolution[0] // field_shape[0] + 1
-    for i, j in rgb_buf:
-        rgb_buf[i, j] = Ftarget[i // r, j // r]
-        
-
-@ti.ad.no_grad
-@ti.kernel
-def get_u_field(t:ti.i32):
-    r = resolution[0] // field_shape[0] + 1
-    max = Lx / 0.2
-    for i, j in rgb_buf:
-        rgb_buf[i, j] = (u[i // r, j // r, t]) / max
-
-
-@ti.ad.no_grad
-@ti.kernel
-def get_v_field(t:ti.i32):
-    r = resolution[0] // field_shape[0] + 1    
-    max = Ly / 0.2
-    for i, j in rgb_buf:
-        rgb_buf[i, j] = (v[i // r, j // r, t]) / max
+        rgb_buf[i, j] = src[i, j, t]
 
 
 @ti.ad.no_grad
 @ti.kernel
 def get_vnorm_field(t:ti.i32):
-    r = resolution[0] // field_shape[0] + 1    
-    max = Ly / 0.2
     for i, j in rgb_buf:
-        rgb_buf[i, j] = ti.sqrt(u[i // r, j // r, t] ** 2 \
-                                + v[i // r, j // r, t] ** 2) / max
+        rgb_buf[i, j] = ti.sqrt(u[i, j, t] ** 2 + v[i, j, t] ** 2)
 
 
 @ti.ad.no_grad
 @ti.kernel
 def interp_velocity(t:ti.i32):
-    for i, j in ti.ndrange((1, imax + 1), (1, jmax + 1)):
+    for i, j in ti.ndrange((imin, imax + 1), (jmin, jmax + 1)):
         V[i, j] = ti.Vector([(u[i, j, t] + u[i + 1, j, t])/2, (v[i, j, t] + v[i, j + 1, t])/2])
 
 
@@ -523,15 +493,15 @@ def forward():
                 vis_option += 1
             elif e.key == 'q':
                 gui.running = False
-        
+
         # Calculate initial F
         cal_nu_rho(istep)
         get_normal_young(istep)
 
         # Advection
         advect_upwind(istep)
-        set_BC(istep)   # Problem: p's index should be modified to reflect p_index
-
+        set_BC(istep)
+        
         # Pressure projection
         for iter in range(MAX_ITER):
             solve_p_jacobi(istep, iter)
@@ -553,52 +523,31 @@ def forward():
         if (istep % nstep) == 0:  # Output data every <nstep> steps
             if vis_option % num_options == 0: # Display VOF distribution
                 print(f'>>> Number of steps:{istep:<5d}, Time:{istep*dt:5.2e} sec. Displaying VOF field.')            
-                get_vof_field(istep + 1)
-                # get_vof_target_field()  # To display the target
-                # get_vof_field(0)                
-                # rgbnp = rgb_buf.to_numpy()
-                # gui.set_image(cm.Blues(rgbnp))
+                get_field_to_buf(F, 2 * (istep + 1))
                 plot_contour(rgb_buf)
 
             if vis_option % num_options == 1:  # Display the u field
                 print(f'>>> Number of steps:{istep:<5d}, Time:{istep*dt:5.2e} sec. Displaying u velocity.')
-                get_u_field(istep)
-                # rgbnp = rgb_buf.to_numpy()
-                # gui.set_image(cm.coolwarm(rgbnp))
+                get_field_to_buf(u, istep)                
                 plot_contour(rgb_buf)
 
             if vis_option % num_options == 2:  # Display the v field
                 print(f'>>> Number of steps:{istep:<5d}, Time:{istep*dt:5.2e} sec. Displaying v velocity.')
-                get_v_field(istep)
-                # rgbnp = rgb_buf.to_numpy()
-                # gui.set_image(cm.coolwarm(rgbnp))
+                get_field_to_buf(v, istep)
                 plot_contour(rgb_buf)
                 
             if vis_option % num_options == 3:  # Display velocity norm
                 print(f'>>> Number of steps:{istep:<5d}, Time:{istep*dt:5.2e} sec. Displaying velocity norm.')            
                 get_vnorm_field(istep)
-                # rgbnp = rgb_buf.to_numpy()
-                # gui.set_image(cm.plasma(rgbnp))
                 plot_contour(rgb_buf)
                 
             if vis_option % num_options == 4:  # Display velocity vectors
                 print(f'>>> Number of steps:{istep:<5d}, Time:{istep*dt:5.2e} sec. Displaying velocity vectors.')
                 interp_velocity(istep)
-                # fv.plot_arrow_field(vector_field=V, arrow_spacing=4, gui=gui)
                 plot_vector(V, arrow_spacing=2, color=0x000000)
 
             gui.show()
         
-            if SAVE_FIG:
-                count = istep // nstep - 1            
-                Fnp = F.to_numpy()
-                fx, fy = 5, Ly / Lx * 5
-                plt.figure(figsize=(fx, fy))
-                plt.axis('off')
-                plt.contourf(Fnp.T, cmap=plt.cm.Blues)
-                plt.savefig(f'output/{count:06d}-f.png')
-                plt.close()
-
     # Compute loss as the last step of forward() pass                
     compute_loss()
 
