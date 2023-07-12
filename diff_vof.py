@@ -153,30 +153,28 @@ def find_area(i, j, cx, cy, r):
 def set_init_F(ic:ti.i32):
     # Sets the initial volume fraction
     if ic == 1:  # Dambreak
-        x1 = 0.0
-        x2 = Lx / 3
+        x1 = Lx / 3 * 1.0
+        x2 = Lx / 3 * 2.0
         y1 = 0.0
         y2 = Ly / 2
         r = Ly / 4
-        # Set initial F field
         for i, j in ti.ndrange(imax + 2, jmax + 2):
             if (x[i] >= x1) and (x[i] <= x2) and (y[j] >= y1) and (y[j] <= y2):
-                # F[i, j, 0] = 1.0
                 Ftarget[i, j] = 1.0
 
     elif ic == 2:  # Rising bubble
         for i, j in ti.ndrange(imax + 2, jmax + 2):
             r = Lx / 12
-            cx, cy = Lx / 2, 2 * r
-            F[i, j, 0] = find_area(i, j, cx, cy, r)
+            cx, cy = Lx / 2, Ly / 2
+            Ftarget[i, j] = find_area(i, j, cx, cy, r)
+            F[i, j, 0] = 1.0
 
     elif ic == 3:  # Liquid drop
         for i, j in ti.ndrange(imax + 2, jmax + 2):
             r = Lx / 12
-            cx, cy = Lx / 2, Ly - 3 * r
-            F[i, j, 0] = 1.0 - find_area(i, j, cx, cy, r)
-            if y[j] < Ly * 0.37:
-                F[i, j, 0] = 1.0
+            cx, cy = Lx / 2, Ly / 2
+            Ftarget[i, j] = 1.0 - find_area(i, j, cx, cy, r)
+
 
                 
 @ti.kernel
@@ -225,11 +223,10 @@ def cal_nu_rho(t:ti.i32):
 
 @ti.kernel
 def advect_upwind(t:ti.i32):
-    # print(f'>>> u_star.shape={u_star.shape}, dxi={dxi} at {t} in advect_upwind.')        
     for i, j in ti.ndrange((imin + 1, imax + 1), (jmin, jmax + 1)):
         v_here = 0.25 * (v[i - 1, j, t] + v[i - 1, j + 1, t] + v[i, j, t] + v[i, j + 1, t])
-        dudx = (u[i,j, t] - u[i-1,j, t]) * dxi if u[i,j, t] > 0 else (u[i+1,j, t]-u[i,j, t])*dxi
-        dudy = (u[i,j, t] - u[i,j-1, t]) * dyi if v_here > 0 else (u[i,j+1, t]-u[i,j, t])*dyi
+        dudx = (u[i, j, t] - u[i - 1, j, t]) * dxi if u[i, j, t] > 0 else (u[i + 1, j, t] - u[i, j, t]) * dxi
+        dudy = (u[i, j, t] - u[i, j - 1, t]) * dyi if v_here > 0 else (u[i, j + 1, t] - u[i, j, t]) * dyi
         kappa_ave = (kappa[i, j, t] + kappa[i - 1, j, t]) / 2.0
         fx_kappa = - sigma[None] * (F[i, j, 2 * t] - F[i - 1, j, 2 * t]) * kappa_ave / dx   # F(2*t) is F at t time step
         u_star[i, j, t] = (
@@ -241,8 +238,8 @@ def advect_upwind(t:ti.i32):
         )
     for i, j in ti.ndrange((imin, imax + 1), (jmin + 1, jmax + 1)):
         u_here = 0.25 * (u[i, j - 1, t] + u[i, j, t] + u[i + 1, j - 1, t] + u[i + 1, j, t])
-        dvdx = (v[i,j, t] - v[i-1,j, t]) * dxi if u_here > 0 else (v[i+1,j, t] - v[i,j, t]) * dxi
-        dvdy = (v[i,j, t] - v[i,j-1, t]) * dyi if v[i,j, t] > 0 else (v[i,j+1, t] - v[i,j, t]) * dyi
+        dvdx = (v[i, j, t] - v[i - 1, j, t]) * dxi if u_here > 0 else (v[i + 1, j, t] - v[i, j, t]) * dxi
+        dvdy = (v[i, j, t] - v[i, j - 1, t]) * dyi if v[i, j, t] > 0 else (v[i, j + 1, t] - v[i, j, t]) * dyi
         kappa_ave = (kappa[i, j, t] + kappa[i, j - 1, t]) / 2.0
         fy_kappa = - sigma[None] * (F[i, j, 2 * t] - F[i, j - 1, 2 * t]) * kappa_ave / dy        
         v_star[i, j, t] = (
@@ -260,23 +257,6 @@ def solve_p_jacobi(t:ti.i32, k:ti.i32):
         rhs = rho[i, j, t] / dt * \
             ((u_star[i + 1, j, t] - u_star[i, j, t]) * dxi +
              (v_star[i, j + 1, t] - v_star[i, j, t]) * dyi)
-        ''' Remove den_corr; not used in 2dvof.py because istep is compile time constant.
-        # Calculate the term due to density gradient
-        drhox1 = (rho[i + 1, j - 1, t] + rho[i + 1, j, t] + rho[i + 1, j + 1, t]) / 3
-        drhox2 = (rho[i - 1, j - 1, t] + rho[i - 1, j, t] + rho[i - 1, j + 1, t]) / 3                
-        drhodx = (dt / drhox1 - dt / drhox2) / (2 * dx)
-        drhoy1 = (rho[i - 1, j + 1, t] + rho[i, j + 1, t] + rho[i + 1, j + 1, t]) / 3
-        drhoy2 = (rho[i - 1, j - 1, t] + rho[i, j - 1, t] + rho[i + 1, j - 1, t]) / 3                
-        drhody = (dt / drhoy1 - dt / drhoy2) / (2 * dy)
-        # 
-        dpdx = (p[i + 1, j, t * (MAX_ITER + 1) + k] - p[i - 1, j, t * (MAX_ITER + 1) + k]) / (2 * dx)
-        dpdy = (p[i, j + 1, t * (MAX_ITER + 1) + k] - p[i, j - 1, t * (MAX_ITER + 1) + k]) / (2 * dy)
-        den_corr = (drhodx * dpdx + drhody * dpdy) * rho[i, j, t] / dt
-        if istep < 2:
-            pass
-        else:
-            rhs -= den_corr
-        '''
         ae = dxi ** 2 if i != imax else 0.0
         aw = dxi ** 2 if i != imin else 0.0
         an = dyi ** 2 if j != jmax else 0.0
@@ -291,7 +271,6 @@ def solve_p_jacobi(t:ti.i32, k:ti.i32):
 
 @ti.kernel
 def copy_p_field(t:ti.i32, k:ti.i32):
-    # print(f'>>> Copying p index {t*(MAX_ITER+1) + MAX_ITER} to {(t+1)*(MAX_ITER +1)}')    
     for i, j in ti.ndrange((imin, imax+1), (jmin, jmax+1)):                                               
         p[i, j, (t + 1) * (MAX_ITER + 1)] = p[i, j, t * (MAX_ITER + 1) + MAX_ITER]
                                                
@@ -299,18 +278,18 @@ def copy_p_field(t:ti.i32, k:ti.i32):
 @ti.kernel
 def update_uv(t:ti.i32):
     for i, j in ti.ndrange((imin + 1, imax + 1), (jmin, jmax + 1)):
-        r = (rho[i, j, t] + rho[i-1, j, t]) * 0.5
-        u[i, j, t+1] = u_star[i, j, t] \
+        r = (rho[i, j, t] + rho[i - 1, j, t]) * 0.5
+        u[i, j, t + 1] = u_star[i, j, t] \
             - dt / r * \
             (p[i, j, t*(MAX_ITER+1)+MAX_ITER] - p[i - 1, j, t*(MAX_ITER+1)+MAX_ITER]) * dxi
-        if u[i, j, t+1] * dt > 0.25 * dx:
-            print(f'U velocity courant number > 1, u[{i},{j},{t+1}] = {u[i,j,t+1]}')
+        if u[i, j, t + 1] * dt > 0.25 * dx:
+            print(f'U velocity courant number > 1, u[{i},{j},{t+1}] = {u[i, j, t+1]}')
     for i, j in ti.ndrange((imin, imax + 1), (jmin + 1, jmax + 1)):
-        r = (rho[i, j, t] + rho[i, j-1, t]) * 0.5
-        v[i, j, t+1] = v_star[i, j, t] \
+        r = (rho[i, j, t] + rho[i, j - 1, t]) * 0.5
+        v[i, j, t + 1] = v_star[i, j, t] \
             - dt / r \
             * (p[i, j, t*(MAX_ITER+1)+MAX_ITER] - p[i, j - 1, t*(MAX_ITER+1)+MAX_ITER]) * dyi
-        if v[i, j, t+1] * dt > 0.25 * dy:
+        if v[i, j, t + 1] * dt > 0.25 * dy:
             print(f'V velocity courant number > 1, v[{i},{j},{t+1}] = {v[i,j,t+1]}')
 
 
@@ -329,7 +308,6 @@ def get_normal_young(t:ti.i32):
         # Summing of mx and my components for normal vector
         mxsum[i, j, t] = (mx1[i, j, t] + mx2[i, j, t] + mx3[i, j, t] + mx4[i, j, t]) / 4
         mysum[i, j, t] = (my1[i, j, t] + my2[i, j, t] + my3[i, j, t] + my4[i, j, t]) / 4
-
         # Normalizing the normal vector into unit vectors
         if abs(mxsum[i, j, t]) < 1e-10 and abs(mysum[i, j, t])< 1e-10:
             mx[i, j, t] = mxsum[i, j, t]
@@ -476,13 +454,9 @@ def compute_loss():
 @ti.kernel
 def apply_grad():
     for i, j in ti.ndrange((1, imax + 1), (1, jmax + 1)):
-        # u[i, j, 0] -= learning_rate * u.grad[i, j, 0]
-        # v[i, j, 0] -= learning_rate * v.grad[i, j, 0]
         if ti.abs(F.grad[i, j, 0]) < 5.:
-            # print(f'>>> F.grad at {i},{j} = {F.grad[i, j, 0]}')
             F[i, j, 0] -= learning_rate * F.grad[i, j, 0]
             F[i, j, 0] = var(0, 1, F[i, j, 0])
-        # print(f'u.grad = {u.grad[i,j,0]} and v.grad = {v.grad[i,j,0]}')
     
 
 def forward():
@@ -500,7 +474,11 @@ def forward():
 
         # Advection
         advect_upwind(istep)
-        set_BC(istep)
+        '''
+        Not necessary; boundary u,v = 0 already, and no update be made on those boundary
+        For p solving, only those u,v=0 will be used.
+        '''
+        # set_BC(istep)  
         
         # Pressure projection
         for iter in range(MAX_ITER):
@@ -509,11 +487,15 @@ def forward():
 
         # Velocity correction
         update_uv(istep)
-        set_BC(istep + 1)
+        '''
+        Not necessary. For VOF advection, only u, v = 0 will be used, which are untouched.
+        And F on the boundary is set at the end of previous step's set_BC
+        '''
+        # set_BC(istep + 1)
 
         # Advect the VOF function
         solve_VOF_rudman(istep)
-        post_process_f(istep)
+        post_process_f(istep)  # Post-processing violates GDAR, but necessary for stablize.
         set_BC(istep + 1)
 
         # Visualization
@@ -545,8 +527,8 @@ def forward():
                 print(f'>>> Number of steps:{istep:<5d}, Time:{istep*dt:5.2e} sec. Displaying velocity vectors.')
                 interp_velocity(istep)
                 plot_vector(V, arrow_spacing=2, color=0x000000)
-
-            gui.show()
+                
+            gui.show(f'./output/{opt}-{istep}.png')
         
     # Compute loss as the last step of forward() pass                
     compute_loss()
@@ -554,10 +536,9 @@ def forward():
 
 # Start main script
 istep = 0
-nstep = 100  # Interval to update GUI
+nstep = 20  # Interval to update GUI
 set_init_F(initial_condition)
 os.makedirs('output', exist_ok=True)  # Make dir for output
-os.makedirs('data', exist_ok=True)  # Make dir for data save; only used for debugging
 gui = ti.GUI('VOF Solver', resolution, background_color=0xFFFFFF)
 vis_option = 0
 
