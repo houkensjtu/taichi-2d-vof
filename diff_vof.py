@@ -104,8 +104,8 @@ kappa = ti.field(float, shape=field_shape, needs_grad=True)  # interface curvatu
 magnitude = ti.field(float, shape=field_shape, needs_grad=True)
 
 # For visualization
-resolution = (400, 400)
-rgb_buf = ti.field(dtype=float, shape=(field_shape[0], field_shape[1]))
+resolution = (800, 400)
+rgb_buf = ti.field(dtype=float, shape=(2 * field_shape[0], field_shape[1]))
 
 print(f'>>> A VOF solver written in Taichi; Press q to exit.')
 print(f'>>> Grid resolution: {nx} x {ny}, dt = {dt:4.2e}')
@@ -175,6 +175,27 @@ def set_init_F(ic:ti.i32):
             cx, cy = Lx / 2, Ly / 2
             Ftarget[i, j] = 1.0 - find_area(i, j, cx, cy, r)
 
+
+@ti.kernel
+def set_pixel(x:ti.f32, y:ti.f32, f:ti.template()):
+    xcord = ti.i32(x * imax)
+    ycord = ti.i32(y * jmax)
+    for i, j in ti.ndrange((xcord-2, xcord + 2),(ycord-2, ycord+2) ):
+        if i >= 0 and j >= 0:
+            f[i, j] = 1.0
+
+
+def set_init_by_paint():
+    gui = ti.GUI("Paint your initial", )
+    while gui.running:
+        gui.contour(Ftarget)
+        gui.get_event()
+        if gui.is_pressed(ti.GUI.ESCAPE):
+            gui.running = False
+        if gui.is_pressed(ti.GUI.LMB):
+            x, y = gui.get_cursor_pos()
+            set_pixel(x, y, Ftarget)
+        gui.show()
 
                 
 @ti.kernel
@@ -427,8 +448,10 @@ def post_process_f(t:ti.i32):
 @ti.ad.no_grad
 @ti.kernel
 def get_field_to_buf(src:ti.template(), t:ti.i32):
-    for i, j in rgb_buf:
+    for i, j in Ftarget:
         rgb_buf[i, j] = src[i, j, t]
+    for i, j in Ftarget:
+        rgb_buf[i + imax + 1, j] = Ftarget[i, j]
 
 
 @ti.ad.no_grad
@@ -528,7 +551,7 @@ def forward():
                 interp_velocity(istep)
                 plot_vector(V, arrow_spacing=2, color=0x000000)
                 
-            gui.show(f'./output/{opt}-{istep}.png')
+            gui.show(f'./output/{opt:03d}-{istep:04d}.png')
         
     # Compute loss as the last step of forward() pass                
     compute_loss()
@@ -537,7 +560,8 @@ def forward():
 # Start main script
 istep = 0
 nstep = 20  # Interval to update GUI
-set_init_F(initial_condition)
+# set_init_F(initial_condition)  # Set initial VOF by fixed shape
+set_init_by_paint()  # Set initial VOF by user painting
 os.makedirs('output', exist_ok=True)  # Make dir for output
 gui = ti.GUI('VOF Solver', resolution, background_color=0xFFFFFF)
 vis_option = 0
