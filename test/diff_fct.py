@@ -411,6 +411,7 @@ set_init_F()
 init_uv()
 set_BC(0, F)
 gui = ti.GUI('FCT test', res=(1200,400))
+os.makedirs('output', exist_ok=True)  # Make dir for output
 for opt in range(1000):
     with ti.ad.Tape(loss):
         forward(eps_value=5e-4)
