@@ -82,7 +82,6 @@ v_star = ti.field(float, shape=field_shape, needs_grad=True)
 # Pressure field shape should be different
 p = ti.field(float, shape=p_shape, needs_grad=True)
 rhs = ti.field(float, shape=field_shape, needs_grad=True)
-
 rho = ti.field(float, shape=field_shape, needs_grad=True)
 nu = ti.field(float, shape=field_shape, needs_grad=True)
 V = ti.Vector.field(2, dtype=float, shape=(field_shape[0], field_shape[1]))  # For displaying velocity field
@@ -273,17 +272,22 @@ def advect_upwind(t:ti.i32):
 
 
 @ti.kernel
-def solve_p_jacobi(t:ti.i32, k:ti.i32):
-    for i, j in ti.ndrange((imin, imax+1), (jmin, jmax+1)):
-        rhs = rho[i, j, t] / dt * \
+def cal_velocity_div(t:ti.i32):
+    for i, j in ti.ndrange((imin, imax+1), (jmin, jmax+1)):    
+        rhs[i, j, t] = rho[i, j, t] / dt * \
             ((u_star[i + 1, j, t] - u_star[i, j, t]) * dxi +
              (v_star[i, j + 1, t] - v_star[i, j, t]) * dyi)
+
+
+@ti.kernel
+def solve_p_jacobi(t:ti.i32, k:ti.i32):
+    for i, j in ti.ndrange((imin, imax+1), (jmin, jmax+1)):
         ae = dxi ** 2 if i != imax else 0.0
         aw = dxi ** 2 if i != imin else 0.0
         an = dyi ** 2 if j != jmax else 0.0
         a_s = dyi ** 2 if j != jmin else 0.0
         ap = - 1.0 * (ae + aw + an + a_s)
-        p[i, j, t * (MAX_ITER + 1) + k + 1] = (rhs \
+        p[i, j, t * (MAX_ITER + 1) + k + 1] = (rhs[i, j, t] \
                                                - ae * p[i+1,j, t * (MAX_ITER + 1) + k] \
                                                - aw * p[i-1,j, t * (MAX_ITER + 1) + k] \
                                                - an * p[i,j+1, t * (MAX_ITER + 1) + k] \
@@ -502,7 +506,9 @@ def forward():
         For p solving, only those u,v=0 will be used.
         '''
         # set_BC(istep)  
-        
+
+        # Calculate the velocity divergence -> rhs
+        cal_velocity_div(istep)
         # Pressure projection
         for iter in range(MAX_ITER):
             solve_p_jacobi(istep, iter)
@@ -560,8 +566,8 @@ def forward():
 # Start main script
 istep = 0
 nstep = 20  # Interval to update GUI
-# set_init_F(initial_condition)  # Set initial VOF by fixed shape
-set_init_by_paint()  # Set initial VOF by user painting
+set_init_F(initial_condition)  # Set initial VOF by fixed shape
+# set_init_by_paint()  # Set initial VOF by user painting
 os.makedirs('output', exist_ok=True)  # Make dir for output
 gui = ti.GUI('VOF Solver', resolution, background_color=0xFFFFFF)
 vis_option = 0
