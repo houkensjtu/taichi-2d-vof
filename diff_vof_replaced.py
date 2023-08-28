@@ -34,7 +34,7 @@ dt = 4e-6  # Use smaller dt for higher density ratio
 eps = 1e-6  # Threshold used in vfconv and f post processings
 
 MAX_TIME_STEPS = 1000
-MAX_ITER = 10
+MAX_ITER = 20
 OPT_ITER = 100
 learning_rate = 0.02
 # Mesh information
@@ -55,7 +55,8 @@ dyi = 1 / dy
 
 # Field shapes
 field_shape = (imax + 2, jmax + 2, MAX_TIME_STEPS)
-p_shape = (imax + 2, jmax + 2, MAX_TIME_STEPS * (MAX_ITER + 1))
+# p_shape = (imax + 2, jmax + 2, MAX_TIME_STEPS * (MAX_ITER + 1))
+p_shape = (imax + 2, jmax + 2, MAX_TIME_STEPS)
 
 # Variables for VOF function
 F = ti.field(float, shape=(imax + 2, jmax + 2, 2 * MAX_TIME_STEPS + 1), needs_grad=True)
@@ -81,7 +82,9 @@ v_star = ti.field(float, shape=field_shape, needs_grad=True)
 
 # Pressure field shape should be different
 p = ti.field(float, shape=p_shape, needs_grad=True)
+p_tmp = ti.field(float, shape=(p_shape[0], p_shape[1]), needs_grad=False)
 rhs = ti.field(float, shape=field_shape, needs_grad=True)
+rhs_tmp = ti.field(float, shape=(field_shape[0], field_shape[1]), needs_grad=False)
 rho = ti.field(float, shape=field_shape, needs_grad=True)
 nu = ti.field(float, shape=field_shape, needs_grad=True)
 V = ti.Vector.field(2, dtype=float, shape=(field_shape[0], field_shape[1]))  # For displaying velocity field
@@ -204,26 +207,26 @@ def set_BC(t:ti.i32):
         u[i, jmin - 1, t] = u[i, jmin, t]
         v[i, jmin, t] = 0
         F[i, jmin - 1, 2 * t] = F[i, jmin, 2 * t]
-        p[i, jmin - 1, t * (MAX_ITER + 1)] = p[i, jmin, t * (MAX_ITER + 1)]
+        p[i, jmin - 1, t] = p[i, jmin, t]
         rho[i, jmin - 1, t] = rho[i, jmin, t]                
         # top: open
         u[i, jmax + 1, t] = u[i, jmax, t]
         v[i, jmax + 1, t] = 0 #v[i, jmax, t]
         F[i, jmax + 1, 2 * t] = F[i, jmax, 2 * t]
-        p[i, jmax + 1, t * (MAX_ITER + 1)] = p[i, jmax, t * (MAX_ITER + 1)]
+        p[i, jmax + 1, t] = p[i, jmax, t]
         rho[i, jmax + 1, t] = rho[i, jmax, t]                
     for j in ti.ndrange(jmax + 2):
         # left: slip
         u[imin, j, t] = 0
         v[imin - 1, j, t] = v[imin, j, t]
         F[imin - 1, j, 2 * t] = F[imin, j, 2 * t]
-        p[imin - 1, j, t * (MAX_ITER + 1)] = p[imin, j, t * (MAX_ITER + 1)]
+        p[imin - 1, j, t] = p[imin, j, t]
         rho[imin - 1, j, t] = rho[imin, j, t]                
         # right: slip
         u[imax + 1, j, t] = 0
         v[imax + 1, j, t] = v[imax, j, t]
         F[imax + 1, j, 2 * t] = F[imax, j, 2 * t]
-        p[imax + 1, j, t * (MAX_ITER + 1)] = p[imax, j, t * (MAX_ITER + 1)]
+        p[imax + 1, j, t] = p[imax, j, t]
         rho[imax + 1, j, t] = rho[imax, j, t]                
 
 
@@ -280,25 +283,52 @@ def cal_velocity_div(t:ti.i32):
 
 
 @ti.kernel
-def solve_p_jacobi(t:ti.i32, k:ti.i32):
+def solve_p_jacobi(t:ti.i32):
     for i, j in ti.ndrange((imin, imax+1), (jmin, jmax+1)):
         ae = dxi ** 2 if i != imax else 0.0
         aw = dxi ** 2 if i != imin else 0.0
         an = dyi ** 2 if j != jmax else 0.0
         a_s = dyi ** 2 if j != jmin else 0.0
         ap = - 1.0 * (ae + aw + an + a_s)
-        p[i, j, t * (MAX_ITER + 1) + k + 1] = (rhs[i, j, t] \
-                                               - ae * p[i+1,j, t * (MAX_ITER + 1) + k] \
-                                               - aw * p[i-1,j, t * (MAX_ITER + 1) + k] \
-                                               - an * p[i,j+1, t * (MAX_ITER + 1) + k] \
-                                               - a_s * p[i,j-1, t * (MAX_ITER + 1) +k] )\
-                                               / ap
+        p[i, j, t + 1] = (rhs[i, j, t] \
+                          - ae * p_tmp[i + 1, j] \
+                          - aw * p_tmp[i - 1, j] \
+                          - an * p_tmp[i, j + 1] \
+                          - a_s * p_tmp[i, j - 1]\
+                          ) / ap
+    for i, j in p_tmp:
+        p_tmp[i, j] = p[i, j, t + 1]
+
 
 @ti.kernel
-def copy_p_field(t:ti.i32, k:ti.i32):
-    for i, j in ti.ndrange((imin, imax+1), (jmin, jmax+1)):                                               
-        p[i, j, (t + 1) * (MAX_ITER + 1)] = p[i, j, t * (MAX_ITER + 1) + MAX_ITER]
-                                               
+def solve_p_grad(t:ti.i32):
+    for i, j in ti.ndrange((imin, imax+1), (jmin, jmax+1)):
+        ae = dxi ** 2 if i != imax else 0.0
+        aw = dxi ** 2 if i != imin else 0.0
+        an = dyi ** 2 if j != jmax else 0.0
+        a_s = dyi ** 2 if j != jmin else 0.0
+        ap = - 1.0 * (ae + aw + an + a_s)
+        rhs_tmp[i, j] = (p.grad[i, j, t + 1] \
+                          - ae * rhs.grad[i + 1, j, t] \
+                          - aw * rhs.grad[i - 1, j, t] \
+                          - an * rhs.grad[i, j + 1, t] \
+                          - a_s * rhs.grad[i, j - 1, t]\
+                          ) / ap
+    for i, j in rhs_tmp:
+        rhs.grad[i, j, t] = rhs_tmp[i, j]
+    
+
+@ti.ad.grad_replaced
+def solve_p_iter(t):
+    for _ in range(MAX_ITER):
+        solve_p_jacobi(t)
+
+
+@ti.ad.grad_for(solve_p_iter)
+def solve_p_grad_iter(t):
+    for _ in range(MAX_ITER):
+        solve_p_grad(t)
+
 
 @ti.kernel
 def update_uv(t:ti.i32):
@@ -306,14 +336,14 @@ def update_uv(t:ti.i32):
         r = (rho[i, j, t] + rho[i - 1, j, t]) * 0.5
         u[i, j, t + 1] = u_star[i, j, t] \
             - dt / r * \
-            (p[i, j, t*(MAX_ITER+1)+MAX_ITER] - p[i - 1, j, t*(MAX_ITER+1)+MAX_ITER]) * dxi
+            (p[i, j, t + 1] - p[i - 1, j, t + 1]) * dxi
         if u[i, j, t + 1] * dt > 0.25 * dx:
             print(f'U velocity courant number > 1, u[{i},{j},{t+1}] = {u[i, j, t+1]}')
     for i, j in ti.ndrange((imin, imax + 1), (jmin + 1, jmax + 1)):
         r = (rho[i, j, t] + rho[i, j - 1, t]) * 0.5
         v[i, j, t + 1] = v_star[i, j, t] \
             - dt / r \
-            * (p[i, j, t*(MAX_ITER+1)+MAX_ITER] - p[i, j - 1, t*(MAX_ITER+1)+MAX_ITER]) * dyi
+            * (p[i, j, t + 1] - p[i, j - 1, t + 1]) * dyi
         if v[i, j, t + 1] * dt > 0.25 * dy:
             print(f'V velocity courant number > 1, v[{i},{j},{t+1}] = {v[i,j,t+1]}')
 
@@ -510,9 +540,10 @@ def forward():
         # Calculate the velocity divergence -> rhs
         cal_velocity_div(istep)
         # Pressure projection
-        for iter in range(MAX_ITER):
-            solve_p_jacobi(istep, iter)
-        copy_p_field(istep, iter)
+        # for iter in range(MAX_ITER):
+        #     solve_p_jacobi(istep)
+        solve_p_iter(istep)
+        # copy_p_field(istep, iter)  # Don't need copy in kernel replaced version
 
         # Velocity correction
         update_uv(istep)
