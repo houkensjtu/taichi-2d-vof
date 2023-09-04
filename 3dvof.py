@@ -131,35 +131,59 @@ def set_init_F(ic:ti.i32):
             if (x[i] >= x1) and (x[i] <= x2) and (y[j] >= y1) and (y[j] <= y2) and (z[k] >= z1) and (z[k] <= z2):
                 F[i, j, k] = 1.0
 
-'''            
+
 @ti.kernel
 def set_BC():
-    for i in ti.ndrange(imax + 2):
+    # TODO: Observe the common pattern of the 3 dimensions; apply abstraction to write more concise code.
+    for i, k in ti.ndrange(imax + 2, kmax + 2):
         # bottom: slip 
-        u[i, jmin - 1] = u[i, jmin]
-        v[i, jmin] = 0
-        F[i, jmin - 1] = F[i, jmin]
-        p[i, jmin - 1] = p[i, jmin]
-        rho[i, jmin - 1] = rho[i, jmin]                
+        u[i, jmin - 1, k] = u[i, jmin, k]
+        v[i, jmin, k] = 0
+        w[i, jmin - 1, k] = w[i, jmin, k]        
+        F[i, jmin - 1, k] = F[i, jmin, k]
+        p[i, jmin - 1, k] = p[i, jmin, k]
+        rho[i, jmin - 1, k] = rho[i, jmin, k]
         # top: open
-        u[i, jmax + 1] = u[i, jmax]
-        v[i, jmax + 1] = 0 #v[i, jmax]
-        F[i, jmax + 1] = F[i, jmax]
-        p[i, jmax + 1] = p[i, jmax]
-        rho[i, jmax + 1] = rho[i, jmax]                
-    for j in ti.ndrange(jmax + 2):
+        u[i, jmax + 1, k] = u[i, jmax, k]
+        v[i, jmax + 1, k] = 0 #v[i, jmax]
+        w[i, jmax + 1, k] = w[i, jmax, k]        
+        F[i, jmax + 1, k] = F[i, jmax, k]
+        p[i, jmax + 1, k] = p[i, jmax, k]
+        rho[i, jmax + 1, k] = rho[i, jmax, k]
+        
+    for j, k in ti.ndrange(jmax + 2, kmax + 2):
         # left: slip
-        u[imin, j] = 0
-        v[imin - 1, j] = v[imin, j]
-        F[imin - 1, j] = F[imin, j]
-        p[imin - 1, j] = p[imin, j]
-        rho[imin - 1, j] = rho[imin, j]                
+        u[imin, j, k] = 0
+        v[imin - 1, j, k] = v[imin, j, k]
+        w[imin - 1, j, k] = w[imin, j, k]        
+        F[imin - 1, j, k] = F[imin, j, k]
+        p[imin - 1, j, k] = p[imin, j, k]
+        rho[imin - 1, j, k] = rho[imin, j, k]                
         # right: slip
-        u[imax + 1, j] = 0
-        v[imax + 1, j] = v[imax, j]
-        F[imax + 1, j] = F[imax, j]
-        p[imax + 1, j] = p[imax, j]
-        rho[imax + 1, j] = rho[imax, j]                
+        u[imax + 1, j, k] = 0
+        v[imax + 1, j, k] = v[imax, j, k]
+        w[imax + 1, j, k] = w[imax, j, k]        
+        F[imax + 1, j, k] = F[imax, j, k]
+        p[imax + 1, j, k] = p[imax, j, k]
+        rho[imax + 1, j, k] = rho[imax, j, k]
+
+    for i, j in ti.ndrange(imax + 2, jmax + 2):
+        # front: slip
+        u[i, j, kmin - 1] = u[i, j, kmin]
+        v[i, j, kmin - 1] = v[i, j, kmin]
+        w[i, j, kmin] = 0
+        F[i, j, kmin - 1] = F[i, j, kmin]
+        p[i, j, kmin - 1] = p[i, j, kmin]
+        rho[i, j, kmin - 1] = rho[i, j, kmin]
+        # back: slip
+        u[i, j, kmax + 1] = u[i, j, kmax]
+        v[i, j, kmax + 1] = v[i, j, kmax]
+        w[i, j, kmax + 1] = 0        
+        F[i, j, kmax + 1] = F[i, j, kmax]
+        p[i, j, kmax + 1] = p[i, j, kmax]
+        rho[i, j, kmax + 1] = rho[i, j, kmax]
+        
+
 
 
 @ti.func
@@ -178,66 +202,63 @@ def cal_nu_rho():
 
 @ti.kernel
 def advect_upwind():
-    for i, j in ti.ndrange((imin + 1, imax + 1), (jmin, jmax + 1)):
-        v_here = 0.25 * (v[i - 1, j] + v[i - 1, j + 1] + v[i, j] + v[i, j + 1])
-        dudx = (u[i,j] - u[i-1,j]) * dxi if u[i,j] > 0 else (u[i+1,j]-u[i,j])*dxi
-        dudy = (u[i,j] - u[i,j-1]) * dyi if v_here > 0 else (u[i,j+1]-u[i,j])*dyi
-        kappa_ave = (kappa[i, j] + kappa[i - 1, j]) / 2.0
-        fx_kappa = - sigma[None] * (F[i, j] - F[i - 1, j]) * kappa_ave / dx        
-        u_star[i, j] = (
-            u[i, j] + dt *
-            (nu[i, j] * (u[i - 1, j] - 2 * u[i, j] + u[i + 1, j]) * dxi**2
-             + nu[i, j] * (u[i, j - 1] - 2 * u[i, j] + u[i, j + 1]) * dyi**2
-             - u[i, j] * dudx - v_here * dudy
-             + gx + fx_kappa * 2 / (rho[i, j] + rho[i - 1, j]))
+    # TODO: Currently a pesudo 3D format; rewrite to full 3D format.
+    for i, j, k in ti.ndrange((imin + 1, imax + 1), (jmin, jmax + 1), (kmin, kmax + 1)):
+        v_here = 0.25 * (v[i - 1, j, k] + v[i - 1, j + 1, k] + v[i, j, k] + v[i, j + 1, k])
+        dudx = (u[i, j, k] - u[i - 1, j, k]) * dxi if u[i, j, k] > 0 else (u[i + 1, j, k] - u[i, j, k]) * dxi
+        dudy = (u[i, j, k] - u[i, j - 1, k]) * dyi if v_here > 0 else (u[i, j + 1, k] - u[i, j, k]) * dyi
+        kappa_ave = (kappa[i, j, k] + kappa[i - 1, j, k]) / 2.0
+        fx_kappa = - sigma[None] * (F[i, j, k] - F[i - 1, j, k]) * kappa_ave / dx
+        u_star[i, j, k] = (
+            u[i, j, k] + dt *
+            (nu[i, j, k] * (u[i - 1, j, k] - 2 * u[i, j, k] + u[i + 1, j, k]) * dxi**2
+             + nu[i, j, k] * (u[i, j - 1, k] - 2 * u[i, j, k] + u[i, j + 1, k]) * dyi**2
+             - u[i, j, k] * dudx - v_here * dudy
+             + gx + fx_kappa * 2 / (rho[i, j, k] + rho[i - 1, j, k]))
         )
-    for i, j in ti.ndrange((imin, imax + 1), (jmin + 1, jmax + 1)):
-        u_here = 0.25 * (u[i, j - 1] + u[i, j] + u[i + 1, j - 1] + u[i + 1, j])
-        dvdx = (v[i,j] - v[i-1,j]) * dxi if u_here > 0 else (v[i+1,j] - v[i,j]) * dxi
-        dvdy = (v[i,j] - v[i,j-1]) * dyi if v[i,j] > 0 else (v[i,j+1] - v[i,j]) * dyi
-        kappa_ave = (kappa[i, j] + kappa[i, j - 1]) / 2.0
-        fy_kappa = - sigma[None] * (F[i, j] - F[i, j - 1]) * kappa_ave / dy        
-        v_star[i, j] = (
-            v[i, j] + dt *
-            (nu[i, j] * (v[i - 1, j] - 2 * v[i, j] + v[i + 1, j]) * dxi**2
-             + nu[i, j] * (v[i, j - 1] - 2 * v[i, j] + v[i, j + 1]) * dyi**2
-             - u_here * dvdx - v[i, j] * dvdy
-             + gy +  fy_kappa * 2 / (rho[i, j] + rho[i, j - 1]))
+    for i, j, k in ti.ndrange((imin, imax + 1), (jmin + 1, jmax + 1), (kmin, kmax + 1)):
+        u_here = 0.25 * (u[i, j - 1, k] + u[i, j, k] + u[i + 1, j - 1, k] + u[i + 1, j, k])
+        dvdx = (v[i, j, k] - v[i - 1, j, k]) * dxi if u_here > 0 else (v[i + 1, j, k] - v[i, j, k]) * dxi
+        dvdy = (v[i, j, k] - v[i, j - 1, k]) * dyi if v[i, j, k] > 0 else (v[i, j + 1, k] - v[i, j, k]) * dyi
+        kappa_ave = (kappa[i, j, k] + kappa[i, j - 1, k]) / 2.0
+        fy_kappa = - sigma[None] * (F[i, j, k] - F[i, j - 1, k]) * kappa_ave / dy        
+        v_star[i, j, k] = (
+            v[i, j, k] + dt *
+            (nu[i, j, k] * (v[i - 1, j, k] - 2 * v[i, j, k] + v[i + 1, j, k]) * dxi**2
+             + nu[i, j, k] * (v[i, j - 1, k] - 2 * v[i, j, k] + v[i, j + 1, k]) * dyi**2
+             - u_here * dvdx - v[i, j, k] * dvdy
+             + gy +  fy_kappa * 2 / (rho[i, j, k] + rho[i, j - 1, k]))
         )
+    for i, j, k in w:
+        w[i, j, k] = 0.0
 
 
 @ti.kernel
 def solve_p_jacobi():
-    for i, j in ti.ndrange((imin, imax+1), (jmin, jmax+1)):
-        rhs = rho[i, j] / dt * \
-            ((u_star[i + 1, j] - u_star[i, j]) * dxi +
-             (v_star[i, j + 1] - v_star[i, j]) * dyi)
-        # istep is compile time constant; so the den_corr actually has no effect
-        # Calculate the term due to density gradient
-        drhox1 = (rho[i + 1, j - 1] + rho[i + 1, j] + rho[i + 1, j + 1]) / 3
-        drhox2 = (rho[i - 1, j - 1] + rho[i - 1, j] + rho[i - 1, j + 1]) / 3                
-        drhodx = (dt / drhox1 - dt / drhox2) / (2 * dx)
-        drhoy1 = (rho[i - 1, j + 1] + rho[i, j + 1] + rho[i + 1, j + 1]) / 3
-        drhoy2 = (rho[i - 1, j - 1] + rho[i, j - 1] + rho[i + 1, j - 1]) / 3                
-        drhody = (dt / drhoy1 - dt / drhoy2) / (2 * dy)
-        dpdx = (p[i + 1, j] - p[i - 1, j]) / (2 * dx)
-        dpdy = (p[i, j + 1] - p[i, j - 1]) / (2 * dy)
-        den_corr = (drhodx * dpdx + drhody * dpdy) * rho[i, j] / dt
-        if istep < 2:
-            pass
-        else:
-            rhs -= den_corr
+    for i, j, k in ti.ndrange((imin, imax+1), (jmin, jmax+1), (kmin, kmax + 1)):
+        rhs = rho[i, j, k] / dt * \
+            ((u_star[i + 1, j, k] - u_star[i, j, k]) * dxi +
+             (v_star[i, j + 1, k] - v_star[i, j, k]) * dyi +
+             (w_star[i, j, k + 1] - w_star[i, j, k]) * dzi)
+        # No dencorr in the 3d version since dencorr was not used in 2d version either.
         ae = dxi ** 2 if i != imax else 0.0
         aw = dxi ** 2 if i != imin else 0.0
         an = dyi ** 2 if j != jmax else 0.0
         a_s = dyi ** 2 if j != jmin else 0.0
-        ap = - 1.0 * (ae + aw + an + a_s)
-        pt[i, j] = (rhs - ae * p[i+1,j] - aw * p[i-1,j] - an * p[i,j+1] - a_s * p[i,j-1]) / ap
+        af = dzi ** 2 if k != kmax else 0.0
+        ab = dzi ** 2 if k != kmin else 0.0
+        ap = - 1.0 * (ae + aw + an + a_s + ab + af)
+        pt[i, j, k] = (rhs - ae * p[i + 1, j, k] \
+                       - aw * p[i - 1, j, k] \
+                       - an * p[i, j + 1, k] \
+                       - a_s * p[i, j - 1, k]\
+                       - af * p[i, j, k - 1] \
+                       - ab * p[i, j, k + 1] ) / ap
             
-    for i, j in ti.ndrange((imin, imax+1), (jmin, jmax+1)):
-        p[i, j] = pt[i, j]
+    for i, j, k in ti.ndrange((imin, imax+1), (jmin, jmax+1), (kmin, kmax + 1)):
+        p[i, j, k] = pt[i, j, k]
 
-            
+'''            
 @ti.kernel
 def update_uv():
     for i, j in ti.ndrange((imin + 1, imax + 1), (jmin, jmax + 1)):
@@ -473,9 +494,8 @@ os.makedirs('output', exist_ok=True)  # Make dir for output
 os.makedirs('data', exist_ok=True)  # Make dir for data save; only used for debugging
 gui = ti.GUI('VOF Solver', resolution, background_color=0xFFFFFF)
 vis_option = 0  # Tag for display
-while gui.running:
-    gui.show()
-'''
+
+
 while gui.running:
     istep += 1
     for e in gui.get_events(gui.RELEASE):
@@ -485,16 +505,19 @@ while gui.running:
             gui.running = False
             
     cal_nu_rho()
-    get_normal_young()
+
+
+    # get_normal_young()
     
     # Advection
     advect_upwind()
     set_BC()
-    
+
     # Pressure projection
     for _ in range(10):
         solve_p_jacobi()
-
+    gui.show()        
+'''        
     update_uv()
     set_BC()
     solve_VOF_rudman()        
