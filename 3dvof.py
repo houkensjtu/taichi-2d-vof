@@ -5,8 +5,9 @@ import matplotlib.cm as cm
 import argparse
 import os
 import flow_visualization as fv
+from pyevtk.hl import gridToVTK
 
-ti.init(arch=ti.cpu, default_fp=ti.f32)  # Set default fp so that float=ti.f32
+ti.init(arch=ti.gpu, default_fp=ti.f32)  # Set default fp so that float=ti.f32
 
 parser = argparse.ArgumentParser()  # Get the initial condition
 # 1 - Dam Break; 2 - Rising Bubble; 3 - Droping liquid
@@ -53,6 +54,10 @@ ynp = np.hstack((0.0, np.linspace(0, Ly, ny + 1), Ly)).astype(np.float32)  # [0,
 y.from_numpy(ynp)
 znp = np.hstack((0.0, np.linspace(0, Lz, nz + 1), Lz)).astype(np.float32)  # [0, 0, ... 1, 1]
 z.from_numpy(znp)
+
+xcor = np.linspace(0.0, 1.0, imax + 2).astype(np.float32)
+ycor = np.linspace(0.0, 1.0, jmax + 2).astype(np.float32)
+zcor = np.linspace(0.0, 1.0, kmax + 2).astype(np.float32)
 
 dx = x[imin + 2] - x[imin + 1]
 dy = y[jmin + 2] - y[jmin + 1]
@@ -126,7 +131,7 @@ def set_init_F(ic:ti.i32):
         y1 = 0.0
         y2 = Ly / 2
         z1 = 0.0
-        z2 = Lz / 2
+        z2 = Lz
         for i, j, k in ti.ndrange(imax + 2, jmax + 2, kmax + 2):
             if (x[i] >= x1) and (x[i] <= x2) and (y[j] >= y1) and (y[j] <= y2) and (z[k] >= z1) and (z[k] <= z2):
                 F[i, j, k] = 1.0
@@ -183,8 +188,6 @@ def set_BC():
         p[i, j, kmax + 1] = p[i, j, kmax]
         rho[i, j, kmax + 1] = rho[i, j, kmax]
         
-
-
 
 @ti.func
 def var(a, b, c):    # Find the median of a,b, and c
@@ -258,21 +261,26 @@ def solve_p_jacobi():
     for i, j, k in ti.ndrange((imin, imax+1), (jmin, jmax+1), (kmin, kmax + 1)):
         p[i, j, k] = pt[i, j, k]
 
-'''            
+
 @ti.kernel
 def update_uv():
-    for i, j in ti.ndrange((imin + 1, imax + 1), (jmin, jmax + 1)):
-        r = (rho[i, j] + rho[i-1, j]) * 0.5
-        u[i, j] = u_star[i, j] - dt / r * (p[i, j] - p[i - 1, j]) * dxi
-        if u[i, j] * dt > 0.25 * dx:
-            print(f'U velocity courant number > 1, u[{i},{j}] = {u[i,j]}')
-    for i, j in ti.ndrange((imin, imax + 1), (jmin + 1, jmax + 1)):
-        r = (rho[i, j] + rho[i, j-1]) * 0.5
-        v[i, j] = v_star[i, j] - dt / r * (p[i, j] - p[i, j - 1]) * dyi
-        if v[i, j] * dt > 0.25 * dy:
-            print(f'V velocity courant number > 1, v[{i},{j}] = {v[i,j]}')
+    for i, j, k in ti.ndrange((imin + 1, imax + 1), (jmin, jmax + 1), (kmin, kmax + 1)):
+        r = (rho[i, j, k] + rho[i - 1, j, k]) * 0.5
+        u[i, j, k] = u_star[i, j, k] - dt / r * (p[i, j, k] - p[i - 1, j, k]) * dxi
+        if u[i, j, k] * dt > 0.25 * dx:
+            print(f'U velocity courant number > 1, u[{i},{j},{k}] = {u[i, j, k]}')
+    for i, j, k in ti.ndrange((imin, imax + 1), (jmin + 1, jmax + 1), (kmin, kmax + 1)):
+        r = (rho[i, j, k] + rho[i, j - 1, k]) * 0.5
+        v[i, j, k] = v_star[i, j, k] - dt / r * (p[i, j, k] - p[i, j - 1, k]) * dyi
+        if v[i, j, k] * dt > 0.25 * dy:
+            print(f'V velocity courant number > 1, v[{i},{j},{k}] = {v[i, j, k]}')
+    for i, j, k in ti.ndrange((imin, imax + 1), (jmin, jmax + 1), (kmin + 1, kmax + 1)):
+        r = (rho[i, j, k] + rho[i, j, k - 1]) * 0.5
+        w[i, j, k] = w_star[i, j, k] - dt / r * (p[i, j, k] - p[i, j, k - 1]) * dzi
+        if w[i, j, k] * dt > 0.25 * dx:
+            print(f'W velocity courant number > 1, w[{i},{j},{k}] = {w[i, j, k]}')
 
-
+'''            
 @ti.kernel
 def get_normal_young():
     for i, j in ti.ndrange((imin, imax + 1), (jmin, jmax + 1)):
@@ -300,8 +308,24 @@ def get_normal_young():
     for i, j in ti.ndrange((imin, imax + 1), (jmin, jmax + 1)):
         kappa[i, j] = -(1 / dx / 2 * (mx[i + 1, j] - mx[i - 1, j]) + \
                         1 / dy / 2 * (my[i, j + 1] - my[i, j - 1]))
-        
+'''        
 
+
+@ti.kernel
+def solve_VOF_upwind():
+    # Upwind advection of VOF; use Ftd as a buffer.
+    for I in ti.grouped(Ftd):
+        Ftd[I] = F[I]
+    for i, j, k in ti.ndrange((imin, imax + 1), (jmin, jmax + 1), (kmin, kmax + 1)):
+        fl = u[i, j, k] * dt * Ftd[i - 1, j, k] if u[i, j, k] > 0 else u[i, j, k] * dt * Ftd[i, j, k]
+        fr = u[i + 1, j, k] * dt * Ftd[i, j, k] if u[i + 1, j, k] > 0 else u[i + 1, j, k] * dt * Ftd[i + 1, j, k]
+        fn = v[i, j + 1, k] * dt * Ftd[i, j, k] if v[i, j + 1, k] > 0 else v[i, j + 1, k] * dt * Ftd[i, j + 1, k]
+        fs = v[i, j, k] * dt * Ftd[i, j - 1, k] if v[i, j, k] > 0 else v[i, j, k] * dt * Ftd[i, j, k]
+        ff = 0
+        fb = 0
+        F[i, j, k] += (fl - fr + fs - fn + ff - fb) * dy / (dx * dy)
+
+'''
 def solve_VOF_rudman():
     if istep % 2 == 0:
         fct_y_sweep()
@@ -440,12 +464,12 @@ def fct_y_sweep():
 
         F[i, j] = var(0, 1, F[i, j])
         
-
+'''
         
 @ti.kernel        
 def post_process_f():
-    for i, j in F:
-        F[i, j] = var(F[i, j], 0, 1)
+    for i, j, k in F:
+        F[i, j, k] = var(F[i, j, k], 0, 1)
 
 
 @ti.kernel
@@ -454,7 +478,7 @@ def get_vof_field():
     for I in ti.grouped(rgb_buf):
         rgb_buf[I] = F[I // r]
 
-
+'''
 @ti.kernel
 def get_u_field():
     r = resolution[0] // nx
@@ -505,8 +529,6 @@ while gui.running:
             gui.running = False
             
     cal_nu_rho()
-
-
     # get_normal_young()
     
     # Advection
@@ -516,14 +538,19 @@ while gui.running:
     # Pressure projection
     for _ in range(10):
         solve_p_jacobi()
-    gui.show()        
-'''        
+
     update_uv()
     set_BC()
-    solve_VOF_rudman()        
+
+    solve_VOF_upwind()
+    # solve_VOF_rudman()    
     post_process_f()
     set_BC()
-
+    if (istep % nstep) == 0:
+        print(f'>>> Exporting {istep} result...')
+        gridToVTK(f'./output/step-{istep:05d}', xcor, ycor, zcor, \
+                  pointData={"VOF": np.ascontiguousarray(F.to_numpy())})
+    '''
     num_options = 5
     if (istep % nstep) == 0:  # Output data every <nstep> steps
         if vis_option % num_options == 0: # Display VOF distribution
@@ -556,7 +583,7 @@ while gui.running:
             fv.plot_arrow_field(vector_field=V, arrow_spacing=4, gui=gui)
             
         gui.show()
-        
+
         if SAVE_FIG:
             count = istep // nstep - 1            
             Fnp = F.to_numpy()
@@ -566,4 +593,4 @@ while gui.running:
             plt.contourf(Fnp.T, cmap=plt.cm.Blues)
             plt.savefig(f'output/{count:06d}-f.png')
             plt.close()
-'''
+    '''
