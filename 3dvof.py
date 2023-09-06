@@ -55,6 +55,7 @@ y.from_numpy(ynp)
 znp = np.hstack((0.0, np.linspace(0, Lz, nz + 1), Lz)).astype(np.float32)  # [0, 0, ... 1, 1]
 z.from_numpy(znp)
 
+# For vtk file export
 xcor = np.linspace(0.0, 1.0, imax + 2).astype(np.float32)
 ycor = np.linspace(0.0, 1.0, jmax + 2).astype(np.float32)
 zcor = np.linspace(0.0, 1.0, kmax + 2).astype(np.float32)
@@ -131,7 +132,7 @@ def set_init_F(ic:ti.i32):
         y1 = 0.0
         y2 = Ly / 2
         z1 = 0.0
-        z2 = Lz
+        z2 = Lz / 3
         for i, j, k in ti.ndrange(imax + 2, jmax + 2, kmax + 2):
             if (x[i] >= x1) and (x[i] <= x2) and (y[j] >= y1) and (y[j] <= y2) and (z[k] >= z1) and (z[k] <= z2):
                 F[i, j, k] = 1.0
@@ -205,40 +206,61 @@ def cal_nu_rho():
 
 @ti.kernel
 def advect_upwind():
-    # TODO: Currently a pesudo 3D format; rewrite to full 3D format.
+    # Full 3D version of the momentum equation; upwind advection used.
+    # 3D curvature is not correct; need to be corrected.
     for i, j, k in ti.ndrange((imin + 1, imax + 1), (jmin, jmax + 1), (kmin, kmax + 1)):
         v_here = 0.25 * (v[i - 1, j, k] + v[i - 1, j + 1, k] + v[i, j, k] + v[i, j + 1, k])
+        w_here = 0.25 * (w[i - 1, j, k] + w[i - 1, j, k + 1] + w[i, j, k] + w[i, j, k + 1] )        
         dudx = (u[i, j, k] - u[i - 1, j, k]) * dxi if u[i, j, k] > 0 else (u[i + 1, j, k] - u[i, j, k]) * dxi
         dudy = (u[i, j, k] - u[i, j - 1, k]) * dyi if v_here > 0 else (u[i, j + 1, k] - u[i, j, k]) * dyi
+        dudz = (u[i, j, k] - u[i, j, k - 1]) * dzi if w_here > 0 else (u[i, j, k + 1] - u[i, j, k]) * dzi
         kappa_ave = (kappa[i, j, k] + kappa[i - 1, j, k]) / 2.0
         fx_kappa = - sigma[None] * (F[i, j, k] - F[i - 1, j, k]) * kappa_ave / dx
         u_star[i, j, k] = (
             u[i, j, k] + dt *
-            (nu[i, j, k] * (u[i - 1, j, k] - 2 * u[i, j, k] + u[i + 1, j, k]) * dxi**2
+            (  nu[i, j, k] * (u[i - 1, j, k] - 2 * u[i, j, k] + u[i + 1, j, k]) * dxi**2
              + nu[i, j, k] * (u[i, j - 1, k] - 2 * u[i, j, k] + u[i, j + 1, k]) * dyi**2
-             - u[i, j, k] * dudx - v_here * dudy
+             + nu[i, j, k] * (u[i, j, k - 1] - 2 * u[i, j, k] + u[i, j, k + 1]) * dzi**2
+             - u[i, j, k] * dudx - v_here * dudy - w_here * dudz
              + gx + fx_kappa * 2 / (rho[i, j, k] + rho[i - 1, j, k]))
         )
     for i, j, k in ti.ndrange((imin, imax + 1), (jmin + 1, jmax + 1), (kmin, kmax + 1)):
         u_here = 0.25 * (u[i, j - 1, k] + u[i, j, k] + u[i + 1, j - 1, k] + u[i + 1, j, k])
+        w_here = 0.25 * (w[i, j - 1, k + 1] + w[i, j - 1, k] + w[i, j, k] + w[i, j, k + 1])        
         dvdx = (v[i, j, k] - v[i - 1, j, k]) * dxi if u_here > 0 else (v[i + 1, j, k] - v[i, j, k]) * dxi
         dvdy = (v[i, j, k] - v[i, j - 1, k]) * dyi if v[i, j, k] > 0 else (v[i, j + 1, k] - v[i, j, k]) * dyi
+        dvdz = (v[i, j, k] - v[i, j, k - 1]) * dzi if w_here > 0 else (v[i, j, k + 1] - v[i, j, k]) * dzi
         kappa_ave = (kappa[i, j, k] + kappa[i, j - 1, k]) / 2.0
         fy_kappa = - sigma[None] * (F[i, j, k] - F[i, j - 1, k]) * kappa_ave / dy        
         v_star[i, j, k] = (
             v[i, j, k] + dt *
-            (nu[i, j, k] * (v[i - 1, j, k] - 2 * v[i, j, k] + v[i + 1, j, k]) * dxi**2
+            (  nu[i, j, k] * (v[i - 1, j, k] - 2 * v[i, j, k] + v[i + 1, j, k]) * dxi**2
              + nu[i, j, k] * (v[i, j - 1, k] - 2 * v[i, j, k] + v[i, j + 1, k]) * dyi**2
-             - u_here * dvdx - v[i, j, k] * dvdy
+             + nu[i, j, k] * (v[i, j, k - 1] - 2 * v[i, j, k] + v[i, j, k + 1]) * dzi**2
+             - u_here * dvdx - v[i, j, k] * dvdy - w_here * dvdz
              + gy +  fy_kappa * 2 / (rho[i, j, k] + rho[i, j - 1, k]))
         )
-    for i, j, k in w:
-        w[i, j, k] = 0.0
+    for i, j, k in ti.ndrange((imin, imax + 1), (jmin, jmax + 1), (kmin + 1, kmax + 1)):
+        u_here = 0.25 * (u[i + 1, j, k - 1] + u[i, j, k - 1] + u[i + 1, j, k] + u[i, j, k])
+        v_here = 0.25 * (v[i, j + 1, k - 1] + v[i, j, k - 1] + v[i, j, k] + v[i, j + 1, k])
+        dwdx = (w[i, j, k] - w[i - 1, j, k]) * dxi if u_here > 0 else (w[i + 1, j, k] - w[i, j, k]) * dxi
+        dwdy = (w[i, j, k] - w[i, j - 1, k]) * dyi if v_here > 0 else (w[i, j + 1, k] - w[i, j, k]) * dyi
+        dwdz = (w[i, j, k] - w[i, j, k - 1]) * dzi if w[i, j, k] > 0 else (w[i, j, k + 1] - w[i, j, k]) * dzi
+        kappa_ave = (kappa[i, j, k] + kappa[i, j, k - 1]) / 2.0
+        fz_kappa = - sigma[None] * (F[i, j, k] - F[i, j, k - 1]) * kappa_ave / dz
+        w_star[i, j, k] = (
+            w[i, j, k] + dt *
+            (  nu[i, j, k] * (w[i - 1, j, k] - 2 * w[i, j, k] + w[i + 1, j, k]) * dxi**2
+             + nu[i, j, k] * (w[i, j - 1, k] - 2 * w[i, j, k] + w[i, j + 1, k]) * dyi**2
+             + nu[i, j, k] * (w[i, j, k - 1] - 2 * w[i, j, k] + w[i, j, k + 1]) * dzi**2
+             - u_here * dwdx - v_here * dwdy - w[i, j, k] * dwdz
+             + gz +  fz_kappa * 2 / (rho[i, j, k] + rho[i, j, k - 1]))
+        )
 
 
 @ti.kernel
 def solve_p_jacobi():
-    for i, j, k in ti.ndrange((imin, imax+1), (jmin, jmax+1), (kmin, kmax + 1)):
+    for i, j, k in ti.ndrange((imin, imax + 1), (jmin, jmax + 1), (kmin, kmax + 1)):
         rhs = rho[i, j, k] / dt * \
             ((u_star[i + 1, j, k] - u_star[i, j, k]) * dxi +
              (v_star[i, j + 1, k] - v_star[i, j, k]) * dyi +
@@ -255,9 +277,8 @@ def solve_p_jacobi():
                        - aw * p[i - 1, j, k] \
                        - an * p[i, j + 1, k] \
                        - a_s * p[i, j - 1, k]\
-                       - af * p[i, j, k - 1] \
-                       - ab * p[i, j, k + 1] ) / ap
-            
+                       - af * p[i, j, k + 1] \
+                       - ab * p[i, j, k - 1] ) / ap
     for i, j, k in ti.ndrange((imin, imax+1), (jmin, jmax+1), (kmin, kmax + 1)):
         p[i, j, k] = pt[i, j, k]
 
@@ -319,11 +340,12 @@ def solve_VOF_upwind():
     for i, j, k in ti.ndrange((imin, imax + 1), (jmin, jmax + 1), (kmin, kmax + 1)):
         fl = u[i, j, k] * dt * Ftd[i - 1, j, k] if u[i, j, k] > 0 else u[i, j, k] * dt * Ftd[i, j, k]
         fr = u[i + 1, j, k] * dt * Ftd[i, j, k] if u[i + 1, j, k] > 0 else u[i + 1, j, k] * dt * Ftd[i + 1, j, k]
+        fs = v[i, j, k] * dt * Ftd[i, j - 1, k] if v[i, j, k] > 0 else v[i, j, k] * dt * Ftd[i, j, k]        
         fn = v[i, j + 1, k] * dt * Ftd[i, j, k] if v[i, j + 1, k] > 0 else v[i, j + 1, k] * dt * Ftd[i, j + 1, k]
-        fs = v[i, j, k] * dt * Ftd[i, j - 1, k] if v[i, j, k] > 0 else v[i, j, k] * dt * Ftd[i, j, k]
-        ff = 0
-        fb = 0
-        F[i, j, k] += (fl - fr + fs - fn + ff - fb) * dy / (dx * dy)
+        fb = w[i, j, k] * dt * Ftd[i, j, k - 1] if w[i, j, k] > 0 else w[i, j, k] * dt * Ftd[i, j, k]
+        ff = w[i, j, k + 1] * dt * Ftd[i, j, k] if w[i, j, k + 1] > 0 else w[i, j, k + 1] * dt * Ftd[i, j, k + 1]
+        F[i, j, k] += (fl - fr + fs - fn + fb - ff) * dx * dy / (dx * dy * dz)
+
 
 '''
 def solve_VOF_rudman():
@@ -547,7 +569,7 @@ while gui.running:
     post_process_f()
     set_BC()
     if (istep % nstep) == 0:
-        print(f'>>> Exporting {istep} result...')
+        print(f'>>> Exporting step-{istep:05d} result...')
         gridToVTK(f'./output/step-{istep:05d}', xcor, ycor, zcor, \
                   pointData={"VOF": np.ascontiguousarray(F.to_numpy())})
     '''
