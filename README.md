@@ -44,6 +44,13 @@ $ ti video  # Use Taichi's video utility to generate a mp4 file
 $ ti gif -i video.mp4  # Use Taichi's gif utility to generate a gif file
 ```
 
+## Extension to 3-Dimension
+The script in this repo can be easily extended to 3-dimension with minor changes in the implementation.
+An experimental dam-break demo is provided in the `3dvof.py` file. The following rendered images are produced by the [Taitopia](https://taitopia.design/) cloud-render.
+The VOF field data are exported to `.obj` file format using Paraview.
+
+<img width="962" alt="Screenshot 2023-09-07 at 22 42 46" src="https://github.com/houkensjtu/taichi-2d-vof/assets/2747993/cb64e783-51c1-49c4-b7cb-28bb44f2f1b0">
+
 ## Implementation
 WIP.
 
