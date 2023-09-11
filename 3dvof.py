@@ -347,146 +347,199 @@ def solve_VOF_upwind():
         F[i, j, k] += (fl - fr + fs - fn + fb - ff) * dx * dy / (dx * dy * dz)
 
 
-'''
+
 def solve_VOF_rudman():
-    if istep % 2 == 0:
+    if istep % 3 == 0:
+        fct_x_sweep()
         fct_y_sweep()
+        fct_z_sweep()        
+    elif istep % 3 == 1:
+        fct_y_sweep()
+        fct_z_sweep()
         fct_x_sweep()
     else:
+        fct_z_sweep()
         fct_x_sweep()
         fct_y_sweep()
-
+        
 
 @ti.kernel
 def fct_x_sweep():
-    for i, j in ti.ndrange((imin, imax + 1), (jmin, jmax + 1)):
-        dv = dx * dy - dt * dy * (u[i + 1, j] - u[i, j])
-        fl_L = u[i, j] * dt * F[i - 1, j] if u[i, j] >= 0 else u[i, j] * dt * F[i, j]
-        fr_L = u[i + 1, j] * dt * F[i, j] if u[i + 1, j] >= 0 else u[i + 1, j] * dt * F[i + 1, j]
+    for i, j, k in ti.ndrange((imin, imax + 1), (jmin, jmax + 1), (kmin, kmax + 1)):
+        dv = dx * dy * dz - dt * dy * dz * (u[i + 1, j, k] - u[i, j, k])
+        fl_L = u[i, j, k] * dt * F[i - 1, j, k] if u[i, j, k] >= 0 else u[i, j, k] * dt * F[i, j, k]
+        fr_L = u[i + 1, j, k] * dt * F[i, j, k] if u[i + 1, j, k] >= 0 else u[i + 1, j, k] * dt * F[i + 1, j, k]
         ft_L = 0
         fb_L = 0
-        Ftd[i, j] = (F[i, j] + (fl_L - fr_L + fb_L - ft_L) * dy / (dx * dy)) * dx * dy / dv
-        if Ftd[i, j] > 1. or Ftd[i, j] < 0:
-            Ftd[i, j] = var(0, 1, Ftd[i, j])
+        Ftd[i, j, k] = (F[i, j, k] + (fl_L - fr_L) * dy * dz / (dx * dy * dz)) * dx * dy * dz / dv
+        if Ftd[i, j, k] > 1. or Ftd[i, j, k] < 0:
+            Ftd[i, j, k] = var(0, 1, Ftd[i, j, k])
         
-    for i, j in ti.ndrange((imin, imax + 1), (jmin, jmax + 1)):
-        fmax = ti.max(Ftd[i, j], Ftd[i - 1, j], Ftd[i + 1, j])
-        fmin = ti.min(Ftd[i, j], Ftd[i - 1, j], Ftd[i + 1, j])
+    for i, j, k in ti.ndrange((imin, imax + 1), (jmin, jmax + 1), (kmin, kmax + 1)):
+        fmax = ti.max(Ftd[i, j, k], Ftd[i - 1, j, k], Ftd[i + 1, j, k])
+        fmin = ti.min(Ftd[i, j, k], Ftd[i - 1, j, k], Ftd[i + 1, j, k])
         
-        fl_L = u[i, j] * dt * F[i - 1, j] if u[i, j] >= 0 else u[i, j] * dt * F[i, j]
-        fr_L = u[i + 1, j] * dt * F[i, j] if u[i + 1, j] >= 0 else u[i + 1, j] * dt * F[i + 1, j]
+        fl_L = u[i, j, k] * dt * F[i - 1, j, k] if u[i, j, k] >= 0 else u[i, j, k] * dt * F[i, j, k]
+        fr_L = u[i + 1, j, k] * dt * F[i, j, k] if u[i + 1, j, k] >= 0 else u[i + 1, j, k] * dt * F[i + 1, j, k]
         ft_L = 0
         fb_L = 0
         
-        fl_H = u[i, j] * dt * F[i - 1, j] if u[i, j] <= 0 else u[i, j] * dt * F[i, j]
-        fr_H = u[i + 1, j] * dt * F[i, j] if u[i + 1, j] <= 0 else u[i + 1, j] * dt * F[i + 1, j]
+        fl_H = u[i, j, k] * dt * F[i - 1, j, k] if u[i, j, k] <= 0 else u[i, j, k] * dt * F[i, j, k]
+        fr_H = u[i + 1, j, k] * dt * F[i, j, k] if u[i + 1, j, k] <= 0 else u[i + 1, j, k] * dt * F[i + 1, j, k]
         ft_H = 0
         fb_H = 0
 
-        ax[i + 1, j] = fr_H - fr_L
-        ax[i, j] = fl_H - fl_L
-        ay[i, j + 1] = 0
-        ay[i, j] = 0
+        ax[i + 1, j, k] = fr_H - fr_L
+        ax[i, j, k] = fl_H - fl_L
+        ay[i, j + 1, k] = 0
+        ay[i, j, k] = 0
 
-        pp = ti.max(0, ax[i, j]) - ti.min(0, ax[i + 1, j]) + ti.max(0, ay[i, j]) - ti.min(0, ay[i, j + 1])
-        qp = (fmax - Ftd[i, j]) * dx
+        pp = ti.max(0, ax[i, j, k]) - ti.min(0, ax[i + 1, j, k]) + ti.max(0, ay[i, j, k]) - ti.min(0, ay[i, j + 1, k])
+        qp = (fmax - Ftd[i, j, k]) * dx
         if pp > 0:
-            rp[i, j] = ti.min(1, qp / pp)
+            rp[i, j, k] = ti.min(1, qp / pp)
         else:
-            rp[i, j] = 0.0
-        pm = ti.max(0, ax[i + 1, j]) - ti.min(0, ax[i, j]) + ti.max(0, ay[i, j + 1]) - ti.min(0, ay[i, j])
-        qm = (Ftd[i, j] - fmin) * dx
+            rp[i, j, k] = 0.0
+        pm = ti.max(0, ax[i + 1, j, k]) - ti.min(0, ax[i, j, k]) + ti.max(0, ay[i, j + 1, k]) - ti.min(0, ay[i, j, k])
+        qm = (Ftd[i, j, k] - fmin) * dx
         if pm > 0:
-            rm[i, j] = ti.min(1, qm / pm)
+            rm[i, j, k] = ti.min(1, qm / pm)
         else:
-            rm[i, j] = 0.0
+            rm[i, j, k] = 0.0
 
-    for i, j in ti.ndrange((imin, imax + 1), (jmin, jmax + 1)):            
-        if ax[i + 1, j] >= 0:
-            cx[i + 1, j] = ti.min(rp[i + 1, j], rm[i, j])
+    for i, j, k in ti.ndrange((imin, imax + 1), (jmin, jmax + 1), (kmin, kmax + 1)):
+        if ax[i + 1, j, k] >= 0:
+            cx[i + 1, j, k] = ti.min(rp[i + 1, j, k], rm[i, j, k])
         else:
-            cx[i + 1, j] = ti.min(rp[i, j], rm[i + 1, j])
+            cx[i + 1, j, k] = ti.min(rp[i, j, k], rm[i + 1, j, k])
 
-        if ay[i, j + 1] >= 0:
-            cy[i, j + 1] = ti.min(rp[i, j + 1], rm[i, j])
+        if ay[i, j + 1, k] >= 0:
+            cy[i, j + 1, k] = ti.min(rp[i, j + 1, k], rm[i, j, k])
         else:
-            cy[i, j + 1] = ti.min(rp[i, j], rm[i, j + 1])
+            cy[i, j + 1, k] = ti.min(rp[i, j, k], rm[i, j + 1, k])
 
-    for i, j in ti.ndrange((imin, imax + 1), (jmin, jmax + 1)):
-        dv = dx * dy - dt * dy * (u[i + 1, j] - u[i, j])        
-        F[i, j] = Ftd[i, j] - ((ax[i + 1, j] * cx[i + 1, j] - \
-                               ax[i, j] * cx[i, j] + \
-                               ay[i, j + 1] * cy[i, j + 1] -\
-                               ay[i, j] * cy[i, j]) / (dy)) * dx * dy / dv
-        F[i, j] = var(0, 1, F[i, j])
+    for i, j, k in ti.ndrange((imin, imax + 1), (jmin, jmax + 1), (kmin, kmax + 1)):
+        dv = dx * dy * dz - dt * dy * dz * (u[i + 1, j, k] - u[i, j, k])
+        F[i, j, k] = Ftd[i, j, k] - ((ax[i + 1, j, k] * cx[i + 1, j, k] - \
+                               ax[i, j, k] * cx[i, j, k] + \
+                               ay[i, j + 1, k] * cy[i, j + 1, k] -\
+                               ay[i, j, k] * cy[i, j, k]) / (dy)) * dx * dy * dz / dv
+        F[i, j, k] = var(0, 1, F[i, j, k])
 
 
 @ti.kernel
 def fct_y_sweep():
-    for i, j in ti.ndrange((imin, imax + 1), (jmin, jmax + 1)):
-        dv = dx * dy - dt * dx * (v[i, j + 1] - v[i, j])
+    for i, j, k in ti.ndrange((imin, imax + 1), (jmin, jmax + 1), (kmin, kmax + 1)):
+        dv = dx * dy * dz - dt * dx * dz * (v[i, j + 1, k] - v[i, j, k])
         fl_L = 0
         fr_L = 0
-        ft_L = v[i, j + 1] * dt * F[i, j] if v[i, j + 1] >= 0 else v[i, j + 1] * dt * F[i, j + 1]
-        fb_L = v[i, j] * dt * F[i, j - 1] if v[i, j] >= 0 else v[i, j] * dt * F[i, j]
-        Ftd[i, j] = (F[i, j] + (fl_L - fr_L + fb_L - ft_L) * dy / (dx * dy)) * dx * dy / dv
-        if Ftd[i, j] > 1. or Ftd[i, j] < 0:
-            Ftd[i, j] = var(0, 1, Ftd[i, j])
+        ft_L = v[i, j + 1, k] * dt * F[i, j, k] if v[i, j + 1, k] >= 0 else v[i, j + 1, k] * dt * F[i, j + 1, k]
+        fb_L = v[i, j, k] * dt * F[i, j - 1, k] if v[i, j, k] >= 0 else v[i, j, k] * dt * F[i, j, k]
+        Ftd[i, j, k] = (F[i, j, k] + (fl_L - fr_L + fb_L - ft_L) * dy / (dx * dy)) * dx * dy * dz / dv
+        if Ftd[i, j, k] > 1. or Ftd[i, j, k] < 0:
+            Ftd[i, j, k] = var(0, 1, Ftd[i, j, k])
 
-    for i, j in ti.ndrange((imin, imax + 1), (jmin, jmax + 1)):
-        fmax = ti.max(Ftd[i, j], Ftd[i, j - 1], Ftd[i, j + 1])
-        fmin = ti.min(Ftd[i, j], Ftd[i, j - 1], Ftd[i, j + 1]) 
+    for i, j, k in ti.ndrange((imin, imax + 1), (jmin, jmax + 1), (kmin, kmax + 1)):
+        fmax = ti.max(Ftd[i, j, k], Ftd[i, j - 1, k], Ftd[i, j + 1, k])
+        fmin = ti.min(Ftd[i, j, k], Ftd[i, j - 1, k], Ftd[i, j + 1, k]) 
         
         fl_L = 0
         fr_L = 0
-        ft_L = v[i, j + 1] * dt * F[i, j] if v[i, j + 1] >= 0 else v[i, j + 1] * dt * F[i, j + 1]
-        fb_L = v[i, j] * dt * F[i, j - 1] if v[i, j] >= 0 else v[i, j] * dt * F[i, j]
+        ft_L = v[i, j + 1, k] * dt * F[i, j, k] if v[i, j + 1, k] >= 0 else v[i, j + 1, k] * dt * F[i, j + 1, k]
+        fb_L = v[i, j, k] * dt * F[i, j - 1, k] if v[i, j, k] >= 0 else v[i, j, k] * dt * F[i, j, k]
         
         fl_H = 0
         fr_H = 0
-        ft_H = v[i, j + 1] * dt * F[i, j] if v[i, j + 1] <= 0 else v[i, j + 1] * dt * F[i, j + 1]
-        fb_H = v[i, j] * dt * F[i, j - 1] if v[i, j] <= 0 else v[i, j] * dt * F[i, j]
+        ft_H = v[i, j + 1, k] * dt * F[i, j, k] if v[i, j + 1, k] <= 0 else v[i, j + 1, k] * dt * F[i, j + 1, k]
+        fb_H = v[i, j, k] * dt * F[i, j - 1, k] if v[i, j, k] <= 0 else v[i, j, k] * dt * F[i, j, k]
 
-        ax[i + 1, j] = 0
-        ax[i, j] = 0
-        ay[i, j + 1] = ft_H - ft_L
-        ay[i, j] = fb_H - fb_L
+        ax[i + 1, j, k] = 0
+        ax[i, j, k] = 0
+        ay[i, j + 1, k] = ft_H - ft_L
+        ay[i, j, k] = fb_H - fb_L
 
-        pp = ti.max(0, ax[i, j]) - ti.min(0, ax[i + 1, j]) + ti.max(0, ay[i, j]) - ti.min(0, ay[i, j + 1])
-        qp = (fmax - Ftd[i, j]) * dx
+        pp = ti.max(0, ax[i, j, k]) - ti.min(0, ax[i + 1, j, k]) + ti.max(0, ay[i, j, k]) - ti.min(0, ay[i, j + 1, k])
+        qp = (fmax - Ftd[i, j, k]) * dx
         if pp > 0:
-            rp[i, j] = ti.min(1, qp / pp)
+            rp[i, j, k] = ti.min(1, qp / pp)
         else:
-            rp[i, j] = 0.0
-        pm = ti.max(0, ax[i + 1, j]) - ti.min(0, ax[i, j]) + ti.max(0, ay[i, j + 1]) - ti.min(0, ay[i, j])
-        qm = (Ftd[i, j] - fmin) * dx
+            rp[i, j, k] = 0.0
+        pm = ti.max(0, ax[i + 1, j, k]) - ti.min(0, ax[i, j, k]) + ti.max(0, ay[i, j + 1, k]) - ti.min(0, ay[i, j, k])
+        qm = (Ftd[i, j, k] - fmin) * dx
         if pm > 0:
-            rm[i, j] = ti.min(1, qm / pm)
+            rm[i, j, k] = ti.min(1, qm / pm)
         else:
-            rm[i, j] = 0.0
+            rm[i, j, k] = 0.0
 
-    for i, j in ti.ndrange((imin, imax + 1), (jmin, jmax + 1)):        
-        if ax[i + 1, j] >= 0:
-            cx[i + 1, j] = ti.min(rp[i + 1, j], rm[i, j])
+    for i, j, k in ti.ndrange((imin, imax + 1), (jmin, jmax + 1), (kmin, kmax + 1)):
+        if ax[i + 1, j, k] >= 0:
+            cx[i + 1, j, k] = ti.min(rp[i + 1, j, k], rm[i, j, k])
         else:
-            cx[i + 1, j] = ti.min(rp[i, j], rm[i + 1, j])
+            cx[i + 1, j, k] = ti.min(rp[i, j, k], rm[i + 1, j, k])
 
-        if ay[i, j + 1] >= 0:
-            cy[i, j + 1] = ti.min(rp[i, j + 1], rm[i, j])
+        if ay[i, j + 1, k] >= 0:
+            cy[i, j + 1, k] = ti.min(rp[i, j + 1, k], rm[i, j, k])
         else:
-            cy[i, j + 1] = ti.min(rp[i, j], rm[i, j + 1])
+            cy[i, j + 1, k] = ti.min(rp[i, j, k], rm[i, j + 1, k])
 
 
-    for i, j in ti.ndrange((imin, imax + 1), (jmin, jmax + 1)):
-        dv = dx * dy - dt * dx * (v[i, j + 1] - v[i, j])        
-        F[i, j] = Ftd[i, j] - ((ax[i + 1, j] * cx[i + 1, j] - \
-                               ax[i, j] * cx[i, j] + \
-                               ay[i, j + 1] * cy[i, j + 1] -\
-                               ay[i, j] * cy[i, j]) / (dy)) * dx * dy / dv
+    for i, j, k in ti.ndrange((imin, imax + 1), (jmin, jmax + 1), (kmin, kmax + 1)):
+        dv = dx * dy * dz - dt * dx * dz * (v[i, j + 1, k] - v[i, j, k])
+        F[i, j, k] = Ftd[i, j, k] - ((ax[i + 1, j, k] * cx[i + 1, j, k] - \
+                               ax[i, j, k] * cx[i, j, k] + \
+                               ay[i, j + 1, k] * cy[i, j + 1, k] -\
+                               ay[i, j, k] * cy[i, j, k]) / (dy)) * dx * dy * dz / dv
+        F[i, j, k] = var(0, 1, F[i, j, k])
 
-        F[i, j] = var(0, 1, F[i, j])
+
+@ti.kernel
+def fct_z_sweep():
+    for i, j, k in ti.ndrange((imin, imax + 1), (jmin, jmax + 1), (kmin, kmax + 1)):
+        dv = dx * dy * dz - dt * dx * dy * (w[i, j, k + 1] - w[i, j, k])
+        ff_L = w[i, j, k + 1] * dt * F[i, j, k] if w[i, j, k + 1] >= 0 else w[i, j, k + 1] * dt * F[i, j, k + 1]
+        fb_L = w[i, j, k] * dt * F[i, j, k - 1] if w[i, j, k] >= 0 else w[i, j, k] * dt * F[i, j, k]
+        Ftd[i, j, k] = (F[i, j, k] + (fb_L - ff_L) * dy * dx / (dx * dy * dz)) * dx * dy * dz / dv
+        if Ftd[i, j, k] > 1. or Ftd[i, j, k] < 0:
+            Ftd[i, j, k] = var(0, 1, Ftd[i, j, k])
+
+    for i, j, k in ti.ndrange((imin, imax + 1), (jmin, jmax + 1), (kmin, kmax + 1)):
+        fmax = ti.max(Ftd[i, j, k], Ftd[i, j, k - 1], Ftd[i, j, k + 1])
+        fmin = ti.min(Ftd[i, j, k], Ftd[i, j, k - 1], Ftd[i, j, k + 1]) 
         
-'''
+        ff_L = w[i, j, k + 1] * dt * F[i, j, k] if w[i, j, k + 1] >= 0 else w[i, j, k + 1] * dt * F[i, j, k + 1]
+        fb_L = w[i, j, k] * dt * F[i, j, k - 1] if w[i, j, k] >= 0 else w[i, j, k] * dt * F[i, j, k]
+        
+        ff_H = w[i, j, k + 1] * dt * F[i, j, k] if w[i, j, k + 1] <= 0 else w[i, j, k + 1] * dt * F[i, j, k + 1]
+        fb_H = w[i, j, k] * dt * F[i, j, k - 1] if w[i, j, k] <= 0 else w[i, j, k] * dt * F[i, j, k]
+
+        az[i, j, k + 1] = ff_H - ff_L
+        az[i, j, k] = fb_H - fb_L
+
+        pp = ti.max(0, az[i, j, k]) - ti.min(0, az[i, j, k + 1])
+        qp = (fmax - Ftd[i, j, k]) * dz
+        if pp > 0:
+            rp[i, j, k] = ti.min(1, qp / pp)
+        else:
+            rp[i, j, k] = 0.0
+        pm = ti.max(0, az[i, j, k + 1]) - ti.min(0, az[i, j, k])
+        qm = (Ftd[i, j, k] - fmin) * dz
+        if pm > 0:
+            rm[i, j, k] = ti.min(1, qm / pm)
+        else:
+            rm[i, j, k] = 0.0
+
+    for i, j, k in ti.ndrange((imin, imax + 1), (jmin, jmax + 1), (kmin, kmax + 1)):
+        if az[i, j, k + 1] >= 0:
+            cz[i, j, k + 1] = ti.min(rp[i, j, k + 1], rm[i, j, k])
+        else:
+            cz[i, j, k + 1] = ti.min(rp[i, j, k], rm[i, j, k + 1])
+
+    for i, j, k in ti.ndrange((imin, imax + 1), (jmin, jmax + 1), (kmin, kmax + 1)):
+        dv = dx * dy * dz - dt * dx * dy * (w[i, j, k + 1] - w[i, j, k])
+        F[i, j, k] = Ftd[i, j, k] - ((az[i, j, k + 1] * cz[i, j, k + 1] - \
+                               az[i, j, k] * cz[i, j, k]) / (dz)) * dx * dy * dz / dv
+        F[i, j, k] = var(0, 1, F[i, j, k])
+
         
 @ti.kernel        
 def post_process_f():
@@ -564,8 +617,8 @@ while gui.running:
     update_uv()
     set_BC()
 
-    solve_VOF_upwind()
-    # solve_VOF_rudman()    
+    # solve_VOF_upwind()
+    solve_VOF_rudman()    
     post_process_f()
     set_BC()
     if (istep % nstep) == 0:
