@@ -51,6 +51,12 @@ The VOF field data are exported to `.obj` file format using Paraview.
 
 <img width="962" alt="Screenshot 2023-09-07 at 22 42 46" src="https://github.com/houkensjtu/taichi-2d-vof/assets/2747993/cb64e783-51c1-49c4-b7cb-28bb44f2f1b0">
 
+The following 3D animation is created in Blender by rendering the `.obj` sequences generated in Paraview:
+
+![ezgif com-crop](https://github.com/houkensjtu/taichi-2d-vof/assets/2747993/53f1f947-3e14-43cc-8127-c5c88d5c7c02)
+
+More details about the 3D implementation will be released in another repo, stay tuned!
+
 ## Implementation
 WIP.
 
